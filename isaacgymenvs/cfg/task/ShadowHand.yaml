@@ -45,13 +45,19 @@ env:
   fallDistance: 0.24
   fallPenalty: 0.0
 
-  objectType: "pen" # can be block, egg or pen
+  # Quasi-static manipulation penalties (negative = penalty)
+  objLinvelPenaltyScale: -0.01
+  objAngvelPenaltyScale: -0.005
+  dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: -0.5
+
+  objectType: "block" # can be block, egg or pen
   objectTypePool: []          # empty = single-type training using objectType above
                               # e.g. ["block","egg","pen","ycb_apple","ycb_banana",
                               #        "ycb_orange","ycb_peach","ycb_pear","ycb_plum",
                               #        "ycb_tomato_soup_can"]
   objectScaleRanges:
-    block: [0.5, 1.2]
+    block: [1, 1]
     egg: [0.6, 1.4]
     pen: [0.6, 1.2]
     default: [0.8, 1.2]      # applied to all ycb_* types

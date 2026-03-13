@@ -71,6 +71,11 @@ class ShadowHand(VecTask):
         self.force_decay = self.cfg["env"].get("forceDecay", 0.99)
         self.force_decay_interval = self.cfg["env"].get("forceDecayInterval", 0.08)
 
+        self.obj_linvel_penalty_scale = self.cfg["env"].get("objLinvelPenaltyScale", 0.0)
+        self.obj_angvel_penalty_scale = self.cfg["env"].get("objAngvelPenaltyScale", 0.0)
+        self.dof_vel_penalty_scale = self.cfg["env"].get("dofVelPenaltyScale", 0.0)
+        self.palm_dist_penalty_scale = self.cfg["env"].get("palmDistPenaltyScale", 0.0)
+
         self.shadow_hand_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
@@ -458,7 +463,11 @@ class ShadowHand(VecTask):
             self.max_episode_length, self.object_pos, self.object_rot, self.goal_pos, self.goal_rot,
             self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.actions, self.action_penalty_scale,
             self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty,
-            self.max_consecutive_successes, self.av_factor, (self.object_type_pool == ["pen"])
+            self.max_consecutive_successes, self.av_factor, (self.object_type_pool == ["pen"]),
+            self.object_linvel, self.object_angvel, self.shadow_hand_dof_vel,
+            self.root_state_tensor[self.hand_indices, 0:3],
+            self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
+            self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
         )
 
         self.extras['consecutive_successes'] = self.consecutive_successes.mean()
@@ -798,7 +807,10 @@ def compute_hand_reward(
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
     actions, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
-    fall_penalty: float, max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool
+    fall_penalty: float, max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool,
+    object_linvel, object_angvel, dof_vel, hand_pos,
+    obj_linvel_penalty_scale: float, obj_angvel_penalty_scale: float,
+    dof_vel_penalty_scale: float, palm_dist_penalty_scale: float
 ):
     # Distance from the hand to the object
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
@@ -815,8 +827,18 @@ def compute_hand_reward(
 
     action_penalty = torch.sum(actions ** 2, dim=-1)
 
+    obj_linvel_penalty = torch.sum(object_linvel ** 2, dim=-1)
+    obj_angvel_penalty = torch.sum(object_angvel ** 2, dim=-1)
+    dof_vel_penalty = torch.sum(dof_vel ** 2, dim=-1)
+    palm_dist_penalty = torch.norm(object_pos - hand_pos, p=2, dim=-1)
+
     # Total reward is: position distance + orientation alignment + action regularization + success bonus + fall penalty
-    reward = dist_rew + rot_rew + action_penalty * action_penalty_scale
+    reward = (dist_rew + rot_rew
+              + action_penalty * action_penalty_scale
+              + obj_linvel_penalty * obj_linvel_penalty_scale
+              + obj_angvel_penalty * obj_angvel_penalty_scale
+              + dof_vel_penalty * dof_vel_penalty_scale
+              + palm_dist_penalty * palm_dist_penalty_scale)
 
     # Find out which envs hit the goal and update successes count
     goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)

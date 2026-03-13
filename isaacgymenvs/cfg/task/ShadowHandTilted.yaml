@@ -45,7 +45,13 @@ env:
   fallDistance: 0.24
   fallPenalty: 0.0
 
-  objectType: "pen" # can be block, egg or pen
+  # Quasi-static manipulation penalties (negative = penalty)
+  objLinvelPenaltyScale: -0.01
+  objAngvelPenaltyScale: -0.005
+  dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: -0.5
+
+  objectType: "block" # can be block, egg or pen
   objectTypePool: []          # empty = single-type training using objectType above
   objectScaleRanges:
     block: [0.5, 1.2]
@@ -59,8 +65,8 @@ env:
   maxConsecutiveSuccesses: 0
 
   # Base rotation parameters (rad/s)
-  baseAngVelMin: 0.05
-  baseAngVelMax: 0.30
+  baseAngVelMin: 0.20
+  baseAngVelMax: 0.50
 
   asset:
     assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"
