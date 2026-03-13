@@ -45,7 +45,7 @@ env:
   fallDistance: 0.24
   fallPenalty: 0.0
 
-  objectType: "block" # can be block, egg or pen
+  objectType: "pen" # can be block, egg or pen
   observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
   successTolerance: 0.1

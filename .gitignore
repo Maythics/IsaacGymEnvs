@@ -31,3 +31,7 @@ runs/
 outputs/
 *.hydra*
 /isaacgymenvs/wandb
+
+*.srtp
+*.pth
+replay_frames/
