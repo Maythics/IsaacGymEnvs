@@ -43,6 +43,7 @@ from .humanoid_amp import HumanoidAMP
 from .ingenuity import Ingenuity
 from .quadcopter import Quadcopter
 from .shadow_hand import ShadowHand
+from .shadow_hand_tilted import ShadowHandTilted
 from .allegro_hand import AllegroHand
 from .dextreme.allegro_hand_dextreme import AllegroHandDextremeManualDR, AllegroHandDextremeADR
 from .trifinger import Trifinger
@@ -110,5 +111,6 @@ isaacgym_task_map = {
     "Ingenuity": Ingenuity,
     "Quadcopter": Quadcopter,
     "ShadowHand": ShadowHand,
+    "ShadowHandTilted": ShadowHandTilted,
     "Trifinger": Trifinger,
 }
