@@ -84,20 +84,33 @@ class ShadowHand(VecTask):
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
 
         self.object_type = self.cfg["env"]["objectType"]
-        assert self.object_type in ["block", "egg", "pen"]
+        object_type_pool = self.cfg["env"].get("objectTypePool", [])
+        if not object_type_pool:
+            object_type_pool = [self.object_type]
+        self.object_type_pool = object_type_pool
 
-        self.ignore_z = (self.object_type == "pen")
+        for t in self.object_type_pool:
+            if t not in {"block", "egg", "pen"} and not t.startswith("ycb_"):
+                raise ValueError(f"Unknown objectType '{t}'. Must be block/egg/pen or ycb_*.")
+
+        self.object_scale_ranges = self.cfg["env"].get("objectScaleRanges", {})
 
         self.asset_files_dict = {
             "block": "urdf/objects/cube_multicolor.urdf",
             "egg": "mjcf/open_ai_assets/hand/egg.xml",
-            "pen": "mjcf/open_ai_assets/hand/pen.xml"
+            "pen": "mjcf/open_ai_assets/hand/pen.xml",
         }
+        for t in self.object_type_pool:
+            if t.startswith("ycb_") and t not in self.asset_files_dict:
+                self.asset_files_dict[t] = f"urdf/ycb_balls/{t}.urdf"
 
         if "asset" in self.cfg["env"]:
             self.asset_files_dict["block"] = self.cfg["env"]["asset"].get("assetFileNameBlock", self.asset_files_dict["block"])
             self.asset_files_dict["egg"] = self.cfg["env"]["asset"].get("assetFileNameEgg", self.asset_files_dict["egg"])
             self.asset_files_dict["pen"] = self.cfg["env"]["asset"].get("assetFileNamePen", self.asset_files_dict["pen"])
+
+        # ignore_z: True only when entire pool is pen (preserve single-type pen behavior)
+        self.ignore_z = (self.object_type_pool == ["pen"])
 
         # can be "openai", "full_no_vel", "full", "full_state"
         self.obs_type = self.cfg["env"]["observationType"]
@@ -228,8 +241,6 @@ class ShadowHand(VecTask):
             # asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
             shadow_hand_asset_file = os.path.normpath(self.cfg["env"]["asset"].get("assetFileName", shadow_hand_asset_file))
 
-        object_asset_file = self.asset_files_dict[self.object_type]
-
         # load shadow hand_ asset
         asset_options = gymapi.AssetOptions()
         asset_options.flip_visual_attachments = False
@@ -296,12 +307,21 @@ class ShadowHand(VecTask):
             for ft_handle in self.fingertip_handles:
                 self.gym.create_asset_force_sensor(shadow_hand_asset, ft_handle, sensor_pose)
 
-        # load manipulated object and goal assets
-        object_asset_options = gymapi.AssetOptions()
-        object_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
+        # load all object types in the pool
+        import random as _random
+        unique_types = list(dict.fromkeys(self.object_type_pool))
+        object_assets = {}   # type_str -> (phys_asset, goal_asset)
+        max_obj_shapes = 0
 
-        object_asset_options.disable_gravity = True
-        goal_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
+        for obj_type in unique_types:
+            obj_file = self.asset_files_dict[obj_type]
+            opt = gymapi.AssetOptions()
+            phys = self.gym.load_asset(self.sim, asset_root, obj_file, opt)
+            opt2 = gymapi.AssetOptions()
+            opt2.disable_gravity = True
+            goal = self.gym.load_asset(self.sim, asset_root, obj_file, opt2)
+            object_assets[obj_type] = (phys, goal)
+            max_obj_shapes = max(max_obj_shapes, self.gym.get_asset_rigid_shape_count(phys))
 
         shadow_hand_start_pose = gymapi.Transform()
         shadow_hand_start_pose.p = gymapi.Vec3(*get_axis_params(0.5, self.up_axis_idx))
@@ -314,7 +334,7 @@ class ShadowHand(VecTask):
         object_start_pose.p.y = shadow_hand_start_pose.p.y + pose_dy
         object_start_pose.p.z = shadow_hand_start_pose.p.z + pose_dz
 
-        if self.object_type == "pen":
+        if self.object_type_pool == ["pen"]:
             object_start_pose.p.z = shadow_hand_start_pose.p.z + 0.02
 
         self.goal_displacement = gymapi.Vec3(-0.2, -0.06, 0.12)
@@ -327,7 +347,7 @@ class ShadowHand(VecTask):
 
         # compute aggregate size
         max_agg_bodies = self.num_shadow_hand_bodies + 2
-        max_agg_shapes = self.num_shadow_hand_shapes + 2
+        max_agg_shapes = self.num_shadow_hand_shapes + max_obj_shapes * 2
 
         self.shadow_hands = []
         self.envs = []
@@ -343,8 +363,18 @@ class ShadowHand(VecTask):
         self.fingertip_handles = [self.gym.find_asset_rigid_body_index(shadow_hand_asset, name) for name in self.fingertips]
 
         shadow_hand_rb_count = self.gym.get_asset_rigid_body_count(shadow_hand_asset)
-        object_rb_count = self.gym.get_asset_rigid_body_count(object_asset)
-        self.object_rb_handles = list(range(shadow_hand_rb_count, shadow_hand_rb_count + object_rb_count))
+        # compute max object rb count across pool (Isaac Gym requires uniform rb count per env)
+        max_obj_rb_count = max(
+            self.gym.get_asset_rigid_body_count(object_assets[t][0]) for t in unique_types
+        )
+        self.object_rb_handles = list(range(shadow_hand_rb_count, shadow_hand_rb_count + max_obj_rb_count))
+
+        # assign per-env object types
+        env_type_indices = [_random.randrange(len(self.object_type_pool)) for _ in range(self.num_envs)]
+        self.env_object_type_idx = torch.tensor(env_type_indices, dtype=torch.long, device=self.device)
+        pen_pool_idx = self.object_type_pool.index("pen") if "pen" in self.object_type_pool else -1
+        self.is_pen = (self.env_object_type_idx == pen_pool_idx) if pen_pool_idx >= 0 \
+                      else torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         for i in range(self.num_envs):
             # create env instance
@@ -368,8 +398,11 @@ class ShadowHand(VecTask):
             if self.obs_type == "full_state" or self.asymmetric_obs:
                 self.gym.enable_actor_dof_force_sensors(env_ptr, shadow_hand_actor)
 
-            # add object
-            object_handle = self.gym.create_actor(env_ptr, object_asset, object_start_pose, "object", i, 0, 0)
+            # add object (per-env type)
+            obj_type = self.object_type_pool[env_type_indices[i]]
+            phys_asset, goal_asset_inst = object_assets[obj_type]
+
+            object_handle = self.gym.create_actor(env_ptr, phys_asset, object_start_pose, "object", i, 0, 0)
             self.object_init_state.append([object_start_pose.p.x, object_start_pose.p.y, object_start_pose.p.z,
                                            object_start_pose.r.x, object_start_pose.r.y, object_start_pose.r.z, object_start_pose.r.w,
                                            0, 0, 0, 0, 0, 0])
@@ -377,11 +410,18 @@ class ShadowHand(VecTask):
             self.object_indices.append(object_idx)
 
             # add goal object
-            goal_handle = self.gym.create_actor(env_ptr, goal_asset, goal_start_pose, "goal_object", i + self.num_envs, 0, 0)
+            goal_handle = self.gym.create_actor(env_ptr, goal_asset_inst, goal_start_pose, "goal_object", i + self.num_envs, 0, 0)
             goal_object_idx = self.gym.get_actor_index(env_ptr, goal_handle, gymapi.DOMAIN_SIM)
             self.goal_object_indices.append(goal_object_idx)
 
-            if self.object_type != "block":
+            # apply per-type random scale
+            scale_range = self.object_scale_ranges.get(obj_type,
+                          self.object_scale_ranges.get("default", [1.0, 1.0]))
+            actor_scale = scale_range[0] + (scale_range[1] - scale_range[0]) * _random.random()
+            self.gym.set_actor_scale(env_ptr, object_handle, actor_scale)
+            self.gym.set_actor_scale(env_ptr, goal_handle, actor_scale)
+
+            if obj_type in ("egg", "pen"):
                 self.gym.set_rigid_body_color(
                     env_ptr, object_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.6, 0.72, 0.98))
                 self.gym.set_rigid_body_color(
@@ -418,7 +458,7 @@ class ShadowHand(VecTask):
             self.max_episode_length, self.object_pos, self.object_rot, self.goal_pos, self.goal_rot,
             self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.actions, self.action_penalty_scale,
             self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty,
-            self.max_consecutive_successes, self.av_factor, (self.object_type == "pen")
+            self.max_consecutive_successes, self.av_factor, (self.object_type_pool == ["pen"])
         )
 
         self.extras['consecutive_successes'] = self.consecutive_successes.mean()
@@ -587,6 +627,12 @@ class ShadowHand(VecTask):
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), 4), device=self.device)
 
         new_rot = randomize_rotation(rand_floats[:, 0], rand_floats[:, 1], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
+        pen_mask = self.is_pen[env_ids]
+        if pen_mask.any():
+            pen_rot = randomize_rotation_pen(rand_floats[:, 0], rand_floats[:, 1], torch.tensor(0.3),
+                                             self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids],
+                                             self.z_unit_tensor[env_ids])
+            new_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_rot)
 
         self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
         self.goal_states[env_ids, 3:7] = new_rot
@@ -623,10 +669,12 @@ class ShadowHand(VecTask):
             self.reset_position_noise * rand_floats[:, self.up_axis_idx]
 
         new_object_rot = randomize_rotation(rand_floats[:, 3], rand_floats[:, 4], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
-        if self.object_type == "pen":
+        pen_mask = self.is_pen[env_ids]
+        if pen_mask.any():
             rand_angle_y = torch.tensor(0.3)
-            new_object_rot = randomize_rotation_pen(rand_floats[:, 3], rand_floats[:, 4], rand_angle_y,
-                                                    self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids], self.z_unit_tensor[env_ids])
+            pen_rot = randomize_rotation_pen(rand_floats[:, 3], rand_floats[:, 4], rand_angle_y,
+                                             self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids], self.z_unit_tensor[env_ids])
+            new_object_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_object_rot)
 
         self.root_state_tensor[self.object_indices[env_ids], 3:7] = new_object_rot
         self.root_state_tensor[self.object_indices[env_ids], 7:13] = torch.zeros_like(self.root_state_tensor[self.object_indices[env_ids], 7:13])

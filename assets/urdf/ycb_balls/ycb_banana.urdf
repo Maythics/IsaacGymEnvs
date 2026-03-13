@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<robot name="ycb_banana">
+  <link name="ycb_banana">
+    <visual>
+      <origin xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="ycb_banana/collision.ply" scale="1 1 1"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="ycb_banana/collision.ply" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.066"/>
+      <inertia ixx="2.05e-04" ixy="0" ixz="0" iyy="2.05e-04" iyz="0" izz="1.07e-05"/>
+    </inertial>
+  </link>
+</robot>

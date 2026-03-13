@@ -46,6 +46,15 @@ env:
   fallPenalty: 0.0
 
   objectType: "pen" # can be block, egg or pen
+  objectTypePool: []          # empty = single-type training using objectType above
+                              # e.g. ["block","egg","pen","ycb_apple","ycb_banana",
+                              #        "ycb_orange","ycb_peach","ycb_pear","ycb_plum",
+                              #        "ycb_tomato_soup_can"]
+  objectScaleRanges:
+    block: [0.5, 1.2]
+    egg: [0.6, 1.4]
+    pen: [0.6, 1.2]
+    default: [0.8, 1.2]      # applied to all ycb_* types
   observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
   successTolerance: 0.1
@@ -144,13 +153,14 @@ task:
             # schedule: "linear"  # "linear" will scale the current random sample by `min(current num steps, schedule_steps) / schedule_steps`
             # schedule_steps: 30000
       object:
-        scale:
-          range: [0.95, 1.05]
-          operation: "scaling"
-          distribution: "uniform"
-          setup_only: True # Property will only be randomized once before simulation is started. See Domain Randomization Documentation for more info.
-          # schedule: "linear"  # "linear" will scale the current random sample by ``min(current num steps, schedule_steps) / schedule_steps`
-          # schedule_steps: 30000
+        # scale: disabled — replaced by objectScaleRanges applied in _create_envs
+        # scale:
+        #   range: [0.95, 1.05]
+        #   operation: "scaling"
+        #   distribution: "uniform"
+        #   setup_only: True
+        #   # schedule: "linear"
+        #   # schedule_steps: 30000
         rigid_body_properties:
           mass: 
             range: [0.5, 1.5]
