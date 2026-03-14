@@ -1,5 +1,5 @@
 # used to create the object
-name: ShadowHandTilted
+name: ShadowStableGrasp
 
 physics_engine: ${..physics_engine}
 
@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 1200
+  episodeLength: 100
   enableDebugVis: False
   aggregateMode: 1
 
@@ -36,37 +36,43 @@ env:
   forceDecay: 0.99
   forceDecayInterval: 0.08
 
-  # reward -> dictionary
-  distRewardScale: -10.0
-  rotRewardScale: 1.0
-  rotEps: 0.1
+  # Stable grasp reward parameters
+  stableGraspScale: 5.0        # exp decay rate for relative velocity reward
+  contactRewardScale: 0.001    # small bonus per active fingertip contact
+  palmDistPenaltyScale: -1.0   # keep object near palm (negative = penalty)
   actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
-  fallDistance: 0.24
-  fallPenalty: -20.0
+  fallDistance: 0.3            # palm-to-object distance threshold for episode failure
 
-  # Quasi-static manipulation penalties (negative = penalty)
-  objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.005
-  dofVelPenaltyScale: -0.001
-  palmDistPenaltyScale: -0.5
+  # Initial hand orientation randomization
+  maxInitOrientationDeg: 60    # max axis-angle deviation from default pose (degrees)
 
-  objectType: "block" # can be block, egg or pen
-  objectTypePool: []          # empty = single-type training using objectType above
+  # Object types
+  objectType: "block"          # can be block, egg, pen, or ycb_*
+  objectTypePool: []           # empty = single-type; set to list for multi-object training
   objectScaleRanges:
     block: [1, 1]
     egg: [0.6, 1.4]
     pen: [0.6, 1.2]
-    default: [0.8, 1.2]      # applied to all ycb_* types
-  observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
+    default: [0.8, 1.2]        # applied to all ycb_* types
+
+  observationType: "full_state"
   asymmetric_observations: False
+
+  # Goal-related params (unused in this task, set to neutral values)
+  distRewardScale: 0.0
+  rotRewardScale: 0.0
+  rotEps: 0.1
+  reachGoalBonus: 0
+  fallPenalty: 0.0
   successTolerance: 0.1
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
-  # Base rotation parameters (rad/s)
-  baseAngVelMin: 0.20
-  baseAngVelMax: 0.30
+  # Quasi-static penalties: penalize object motion, hand shaking, and high torques
+  objLinvelPenaltyScale: -0.05   # penalize object linear velocity (L2 squared)
+  objAngvelPenaltyScale: -0.02   # penalize object angular velocity (L2 squared)
+  dofVelPenaltyScale: -0.001     # suppress fast joint motion (hand shaking)
+  dofForcePenaltyScale: -0.0002  # reduce unnecessary joint torques
 
   asset:
     assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"
@@ -80,15 +86,15 @@ env:
 task:
   randomize: False
   randomization_params:
-    frequency: 720   # Define how many simulation steps between generating new randomizations
+    frequency: 720
     observations:
-      range: [0, .002] # range for the white noise
-      range_correlated: [0, .001] # range for correlated noise, refreshed with freq `frequency`
+      range: [0, .002]
+      range_correlated: [0, .001]
       operation: "additive"
       distribution: "gaussian"
     actions:
       range: [0., .05]
-      range_correlated: [0, .015] # range for correlated noise, refreshed with freq `frequency`
+      range_correlated: [0, .015]
       operation: "additive"
       distribution: "gaussian"
     sim_params:
@@ -160,7 +166,7 @@ sim:
   physx:
     num_threads: ${....num_threads}
     solver_type: ${....solver_type}
-    use_gpu: ${contains:"cuda",${....sim_device}} # set to False to run on CPU
+    use_gpu: ${contains:"cuda",${....sim_device}}
     num_position_iterations: 8
     num_velocity_iterations: 0
     max_gpu_contact_pairs: 8388608 # 8*1024*1024
@@ -170,4 +176,4 @@ sim:
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 1000.0
     default_buffer_size_multiplier: 5.0
-    contact_collection: 0 # 0: CC_NEVER (don't collect contact info), 1: CC_LAST_SUBSTEP (collect only contacts on last substep), 2: CC_ALL_SUBSTEPS (broken - do not use!)
+    contact_collection: 0

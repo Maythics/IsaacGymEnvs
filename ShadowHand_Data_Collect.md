@@ -4,6 +4,14 @@
 
 This guide covers training and data collection with the ShadowHand dexterous manipulation environment, including YCB object support.
 
+Available tasks:
+
+| Task | Description |
+|---|---|
+| `ShadowHand` | Reorientation to a goal pose |
+| `ShadowHandTilted` | Reorientation with continuously rotating base |
+| `ShadowStableGrasp` | Stable grasp: keep object at rest in palm under gravity |
+
 ---
 
 ## Object Types
@@ -157,6 +165,97 @@ objectScaleRanges:
   egg: [0.5, 1.2]
   pen: [0.5, 1.2]
   ycb_apple: [1.0, 1.0]    # YCB objects default to no scaling
+```
+
+---
+
+---
+
+## ShadowStableGrasp Task
+
+### What it does
+
+The object starts at rest inside the palm. The hand is randomly tilted (up to `maxInitOrientationDeg` degrees) at each episode reset, varying the effective gravity direction in palm space. The agent must hold the object in the palm without letting it fall.
+
+Episode terminates when the object drifts more than `fallDistance` (0.3 m) from the palm center, or after `episodeLength` (300) steps.
+
+### Reward structure
+
+| Term | Sign | What it penalizes |
+|---|---|---|
+| `stable_reward` | + | `exp(-‖v_obj − v_palm‖ · stableGraspScale)` — 1.0 when object is stationary relative to palm |
+| `palmDistPenalty` | − | Object distance from palm center |
+| `objLinvelPenalty` | − | Object linear velocity (L2 squared) — quasi-static |
+| `objAngvelPenalty` | − | Object angular velocity (L2 squared) — quasi-static |
+| `dofVelPenalty` | − | Joint velocity squared sum — suppresses hand shaking |
+| `dofForcePenalty` | − | Joint torque squared sum — reduces unnecessary force |
+| `actionPenalty` | − | Action magnitude squared |
+| `contactReward` | + | Bonus per active fingertip contact |
+
+### Observation space (219-dim)
+
+| Slice | Content |
+|---|---|
+| 0–23 | DOF positions |
+| 24–47 | DOF velocities × 0.2 |
+| 48–71 | DOF forces × 10 |
+| 72–78 | Object pose (pos + quat) |
+| 79–84 | Object linvel / angvel × 0.2 |
+| 85–97 | Palm pose (pos + quat) + linvel + angvel × 0.2 |
+| 98–103 | Relative pos and linvel (object − palm) |
+| 104–168 | Fingertip states (13 × 5) |
+| 169–198 | Fingertip FT sensors × 10 (6 × 5) |
+| 199–218 | Last actions |
+
+### Training
+
+```bash
+cd /home/srtp/research_manip/IsaacGymEnvs/isaacgymenvs
+
+# Basic run
+python train.py task=ShadowStableGrasp headless=True
+
+# Single YCB object
+python train.py task=ShadowStableGrasp task.env.objectType=ycb_apple headless=True
+
+# Multi-object pool
+python train.py task=ShadowStableGrasp \
+  'task.env.objectTypePool=[block,egg,ycb_apple,ycb_orange]' \
+  headless=True
+
+# Small-scale test (256 envs)
+python train.py task=ShadowStableGrasp \
+  num_envs=256 'train.params.config.minibatch_size=512' \
+  max_iterations=100 headless=True
+```
+
+### Key config overrides (`task.env.*`)
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxInitOrientationDeg` | 30 | Max random tilt of hand at episode start (degrees) |
+| `stableGraspScale` | 5.0 | Exp decay rate for relative-velocity reward |
+| `fallDistance` | 0.3 | Palm-to-object distance that triggers episode reset (m) |
+| `palmDistPenaltyScale` | −1.0 | Weight for palm distance penalty |
+| `objLinvelPenaltyScale` | −0.05 | Weight for object linear velocity penalty |
+| `objAngvelPenaltyScale` | −0.02 | Weight for object angular velocity penalty |
+| `dofVelPenaltyScale` | −0.001 | Weight for joint velocity penalty |
+| `dofForcePenaltyScale` | −0.0002 | Weight for joint torque penalty |
+| `contactRewardScale` | 0.001 | Bonus per active fingertip contact |
+| `episodeLength` | 300 | Max steps per episode |
+
+### Resuming / Inference
+
+```bash
+# Resume training
+python train.py task=ShadowStableGrasp \
+  checkpoint=runs/ShadowStableGrasp/nn/ShadowStableGrasp.pth \
+  headless=True
+
+# Inference only
+python train.py task=ShadowStableGrasp \
+  checkpoint=runs/ShadowStableGrasp/nn/ShadowStableGrasp.pth \
+  test=True num_envs=64
 ```
 
 ---
