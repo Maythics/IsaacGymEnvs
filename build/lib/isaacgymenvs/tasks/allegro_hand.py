@@ -35,18 +35,15 @@ from isaacgym import gymapi
 
 from isaacgymenvs.utils.torch_jit_utils import scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, \
     to_torch, get_axis_params, torch_rand_float, tensor_clamp  
-
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
 
-class ShadowHand(VecTask):
+class AllegroHand(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render):
 
         self.cfg = cfg
 
-        self.randomize = self.cfg["task"]["randomize"]
-        self.randomization_params = self.cfg["task"]["randomization_params"]
         self.aggregate_mode = self.cfg["env"]["aggregateMode"]
 
         self.dist_reward_scale = self.cfg["env"]["distRewardScale"]
@@ -71,11 +68,6 @@ class ShadowHand(VecTask):
         self.force_decay = self.cfg["env"].get("forceDecay", 0.99)
         self.force_decay_interval = self.cfg["env"].get("forceDecayInterval", 0.08)
 
-        self.obj_linvel_penalty_scale = self.cfg["env"].get("objLinvelPenaltyScale", 0.0)
-        self.obj_angvel_penalty_scale = self.cfg["env"].get("objAngvelPenaltyScale", 0.0)
-        self.dof_vel_penalty_scale = self.cfg["env"].get("dofVelPenaltyScale", 0.0)
-        self.palm_dist_penalty_scale = self.cfg["env"].get("palmDistPenaltyScale", 0.0)
-
         self.shadow_hand_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
@@ -89,54 +81,37 @@ class ShadowHand(VecTask):
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
 
         self.object_type = self.cfg["env"]["objectType"]
-        object_type_pool = self.cfg["env"].get("objectTypePool", [])
-        if not object_type_pool:
-            object_type_pool = [self.object_type]
-        self.object_type_pool = object_type_pool
+        assert self.object_type in ["block", "egg", "pen"]
 
-        for t in self.object_type_pool:
-            if t not in {"block", "egg", "pen"} and not t.startswith("ycb_"):
-                raise ValueError(f"Unknown objectType '{t}'. Must be block/egg/pen or ycb_*.")
-
-        self.object_scale_ranges = self.cfg["env"].get("objectScaleRanges", {})
+        self.ignore_z = (self.object_type == "pen")
 
         self.asset_files_dict = {
             "block": "urdf/objects/cube_multicolor.urdf",
             "egg": "mjcf/open_ai_assets/hand/egg.xml",
-            "pen": "mjcf/open_ai_assets/hand/pen.xml",
+            "pen": "mjcf/open_ai_assets/hand/pen.xml"
         }
-        for t in self.object_type_pool:
-            if t.startswith("ycb_") and t not in self.asset_files_dict:
-                self.asset_files_dict[t] = f"urdf/ycb_balls/{t}.urdf"
 
         if "asset" in self.cfg["env"]:
             self.asset_files_dict["block"] = self.cfg["env"]["asset"].get("assetFileNameBlock", self.asset_files_dict["block"])
             self.asset_files_dict["egg"] = self.cfg["env"]["asset"].get("assetFileNameEgg", self.asset_files_dict["egg"])
             self.asset_files_dict["pen"] = self.cfg["env"]["asset"].get("assetFileNamePen", self.asset_files_dict["pen"])
 
-        # ignore_z: True only when entire pool is pen (preserve single-type pen behavior)
-        self.ignore_z = (self.object_type_pool == ["pen"])
-
-        # can be "openai", "full_no_vel", "full", "full_state"
+        # can be "full_no_vel", "full", "full_state"
         self.obs_type = self.cfg["env"]["observationType"]
 
-        if not (self.obs_type in ["openai", "full_no_vel", "full", "full_state"]):
+        if not (self.obs_type in ["full_no_vel", "full", "full_state"]):
             raise Exception(
                 "Unknown type of observations!\nobservationType should be one of: [openai, full_no_vel, full, full_state]")
 
         print("Obs type:", self.obs_type)
 
         self.num_obs_dict = {
-            "openai": 42,
-            "full_no_vel": 77,
-            "full": 157,
-            "full_state": 211
+            "full_no_vel": 50,
+            "full": 72,
+            "full_state": 88
         }
 
         self.up_axis = 'z'
-
-        self.fingertips = ["robot0:ffdistal", "robot0:mfdistal", "robot0:rfdistal", "robot0:lfdistal", "robot0:thdistal"]
-        self.num_fingertips = len(self.fingertips)
 
         self.use_vel_obs = False
         self.fingertip_obs = True
@@ -144,11 +119,11 @@ class ShadowHand(VecTask):
 
         num_states = 0
         if self.asymmetric_obs:
-            num_states = 211
+            num_states = 88
 
         self.cfg["env"]["numObservations"] = self.num_obs_dict[self.obs_type]
         self.cfg["env"]["numStates"] = num_states
-        self.cfg["env"]["numActions"] = 20
+        self.cfg["env"]["numActions"] = 16
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
 
@@ -170,11 +145,11 @@ class ShadowHand(VecTask):
         rigid_body_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
 
         if self.obs_type == "full_state" or self.asymmetric_obs:
-            sensor_tensor = self.gym.acquire_force_sensor_tensor(self.sim)
-            self.vec_sensor_tensor = gymtorch.wrap_tensor(sensor_tensor).view(self.num_envs, self.num_fingertips * 6)
+        #     sensor_tensor = self.gym.acquire_force_sensor_tensor(self.sim)
+        #     self.vec_sensor_tensor = gymtorch.wrap_tensor(sensor_tensor).view(self.num_envs, self.num_fingertips * 6)
 
-            dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
-            self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(self.num_envs, self.num_shadow_hand_dofs)
+             dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
+             self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(self.num_envs, self.num_shadow_hand_dofs)
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -193,6 +168,8 @@ class ShadowHand(VecTask):
         self.root_state_tensor = gymtorch.wrap_tensor(actor_root_state_tensor).view(-1, 13)
 
         self.num_dofs = self.gym.get_sim_dof_count(self.sim) // self.num_envs
+        print("Num dofs: ", self.num_dofs)
+
         self.prev_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
         self.cur_targets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
 
@@ -219,16 +196,12 @@ class ShadowHand(VecTask):
         self.rb_forces = torch.zeros((self.num_envs, self.num_bodies, 3), dtype=torch.float, device=self.device)
 
     def create_sim(self):
-        self.dt = self.cfg["sim"]["dt"]
-        self.up_axis_idx = 2 if self.up_axis == 'z' else 1 # index of up axis: Y=1, Z=2
+        self.dt = self.sim_params.dt
+        self.up_axis_idx = 2 # index of up axis: Y=1, Z=2
 
         self.sim = super().create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
         self._create_ground_plane()
         self._create_envs(self.num_envs, self.cfg["env"]['envSpacing'], int(np.sqrt(self.num_envs)))
-
-        # If randomizing, apply once immediately on startup before the fist sim step
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
 
     def _create_ground_plane(self):
         plane_params = gymapi.PlaneParams()
@@ -239,12 +212,14 @@ class ShadowHand(VecTask):
         lower = gymapi.Vec3(-spacing, -spacing, 0.0)
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
-        asset_root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets'))
-        shadow_hand_asset_file = os.path.normpath("mjcf/open_ai_assets/hand/shadow_hand.xml")
+        asset_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets')
+        allegro_hand_asset_file = "urdf/kuka_allegro_description/allegro.urdf"
 
         if "asset" in self.cfg["env"]:
-            # asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
-            shadow_hand_asset_file = os.path.normpath(self.cfg["env"]["asset"].get("assetFileName", shadow_hand_asset_file))
+            asset_root = self.cfg["env"]["asset"].get("assetRoot", asset_root)
+            allegro_hand_asset_file = self.cfg["env"]["asset"].get("assetFileName", allegro_hand_asset_file)
+
+        object_asset_file = self.asset_files_dict[self.object_type]
 
         # load shadow hand_ asset
         asset_options = gymapi.AssetOptions()
@@ -257,40 +232,27 @@ class ShadowHand(VecTask):
 
         if self.physics_engine == gymapi.SIM_PHYSX:
             asset_options.use_physx_armature = True
-        # Note - DOF mode is set in the MJCF file and loaded by Isaac Gym
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_POS
 
-        shadow_hand_asset = self.gym.load_asset(self.sim, asset_root, shadow_hand_asset_file, asset_options)
+        allegro_hand_asset = self.gym.load_asset(self.sim, asset_root, allegro_hand_asset_file, asset_options)
 
-        self.num_shadow_hand_bodies = self.gym.get_asset_rigid_body_count(shadow_hand_asset)
-        self.num_shadow_hand_shapes = self.gym.get_asset_rigid_shape_count(shadow_hand_asset)
-        self.num_shadow_hand_dofs = self.gym.get_asset_dof_count(shadow_hand_asset)
-        self.num_shadow_hand_actuators = self.gym.get_asset_actuator_count(shadow_hand_asset)
-        self.num_shadow_hand_tendons = self.gym.get_asset_tendon_count(shadow_hand_asset)
+        self.num_shadow_hand_bodies = self.gym.get_asset_rigid_body_count(allegro_hand_asset)
+        self.num_shadow_hand_shapes = self.gym.get_asset_rigid_shape_count(allegro_hand_asset)
+        self.num_shadow_hand_dofs = self.gym.get_asset_dof_count(allegro_hand_asset)
+        print("Num dofs: ", self.num_shadow_hand_dofs)
+        self.num_shadow_hand_actuators = self.num_shadow_hand_dofs
 
-        # tendon set up
-        limit_stiffness = 30
-        t_damping = 0.1
-        relevant_tendons = ["robot0:T_FFJ1c", "robot0:T_MFJ1c", "robot0:T_RFJ1c", "robot0:T_LFJ1c"]
-        tendon_props = self.gym.get_asset_tendon_properties(shadow_hand_asset)
+        self.actuated_dof_indices = [i for i in range(self.num_shadow_hand_dofs)]
 
-        for i in range(self.num_shadow_hand_tendons):
-            for rt in relevant_tendons:
-                if self.gym.get_asset_tendon_name(shadow_hand_asset, i) == rt:
-                    tendon_props[i].limit_stiffness = limit_stiffness
-                    tendon_props[i].damping = t_damping
-        self.gym.set_asset_tendon_properties(shadow_hand_asset, tendon_props)
-
-        actuated_dof_names = [self.gym.get_asset_actuator_joint_name(shadow_hand_asset, i) for i in range(self.num_shadow_hand_actuators)]
-        self.actuated_dof_indices = [self.gym.find_asset_dof_index(shadow_hand_asset, name) for name in actuated_dof_names]
-
-        # get shadow_hand dof properties, loaded by Isaac Gym from the MJCF file
-        shadow_hand_dof_props = self.gym.get_asset_dof_properties(shadow_hand_asset)
+        # set shadow_hand dof properties
+        shadow_hand_dof_props = self.gym.get_asset_dof_properties(allegro_hand_asset)
 
         self.shadow_hand_dof_lower_limits = []
         self.shadow_hand_dof_upper_limits = []
         self.shadow_hand_dof_default_pos = []
         self.shadow_hand_dof_default_vel = []
+        self.sensors = []
+        sensor_pose = gymapi.Transform()
 
         for i in range(self.num_shadow_hand_dofs):
             self.shadow_hand_dof_lower_limits.append(shadow_hand_dof_props['lower'][i])
@@ -298,48 +260,39 @@ class ShadowHand(VecTask):
             self.shadow_hand_dof_default_pos.append(0.0)
             self.shadow_hand_dof_default_vel.append(0.0)
 
+            print("Max effort: ", shadow_hand_dof_props['effort'][i])
+            shadow_hand_dof_props['effort'][i] = 0.5
+            shadow_hand_dof_props['stiffness'][i] = 3
+            shadow_hand_dof_props['damping'][i] = 0.1
+            shadow_hand_dof_props['friction'][i] = 0.01
+            shadow_hand_dof_props['armature'][i] = 0.001
+
         self.actuated_dof_indices = to_torch(self.actuated_dof_indices, dtype=torch.long, device=self.device)
         self.shadow_hand_dof_lower_limits = to_torch(self.shadow_hand_dof_lower_limits, device=self.device)
         self.shadow_hand_dof_upper_limits = to_torch(self.shadow_hand_dof_upper_limits, device=self.device)
         self.shadow_hand_dof_default_pos = to_torch(self.shadow_hand_dof_default_pos, device=self.device)
         self.shadow_hand_dof_default_vel = to_torch(self.shadow_hand_dof_default_vel, device=self.device)
 
-        self.fingertip_handles = [self.gym.find_asset_rigid_body_index(shadow_hand_asset, name) for name in self.fingertips]
+        # load manipulated object and goal assets
+        object_asset_options = gymapi.AssetOptions()
+        object_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
 
-        # create fingertip force sensors, if needed
-        if self.obs_type == "full_state" or self.asymmetric_obs:
-            sensor_pose = gymapi.Transform()
-            for ft_handle in self.fingertip_handles:
-                self.gym.create_asset_force_sensor(shadow_hand_asset, ft_handle, sensor_pose)
-
-        # load all object types in the pool
-        import random as _random
-        unique_types = list(dict.fromkeys(self.object_type_pool))
-        object_assets = {}   # type_str -> (phys_asset, goal_asset)
-        max_obj_shapes = 0
-
-        for obj_type in unique_types:
-            obj_file = self.asset_files_dict[obj_type]
-            opt = gymapi.AssetOptions()
-            phys = self.gym.load_asset(self.sim, asset_root, obj_file, opt)
-            opt2 = gymapi.AssetOptions()
-            opt2.disable_gravity = True
-            goal = self.gym.load_asset(self.sim, asset_root, obj_file, opt2)
-            object_assets[obj_type] = (phys, goal)
-            max_obj_shapes = max(max_obj_shapes, self.gym.get_asset_rigid_shape_count(phys))
+        object_asset_options.disable_gravity = True
+        goal_asset = self.gym.load_asset(self.sim, asset_root, object_asset_file, object_asset_options)
 
         shadow_hand_start_pose = gymapi.Transform()
         shadow_hand_start_pose.p = gymapi.Vec3(*get_axis_params(0.5, self.up_axis_idx))
+        shadow_hand_start_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 1, 0), np.pi) * gymapi.Quat.from_axis_angle(gymapi.Vec3(1, 0, 0), 0.47 * np.pi) * gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), 0.25 * np.pi)
 
         object_start_pose = gymapi.Transform()
         object_start_pose.p = gymapi.Vec3()
         object_start_pose.p.x = shadow_hand_start_pose.p.x
-        pose_dy, pose_dz = -0.39, 0.10  
+        pose_dy, pose_dz = -0.2, 0.06
 
         object_start_pose.p.y = shadow_hand_start_pose.p.y + pose_dy
         object_start_pose.p.z = shadow_hand_start_pose.p.z + pose_dz
 
-        if self.object_type_pool == ["pen"]:
+        if self.object_type == "pen":
             object_start_pose.p.z = shadow_hand_start_pose.p.z + 0.02
 
         self.goal_displacement = gymapi.Vec3(-0.2, -0.06, 0.12)
@@ -352,9 +305,9 @@ class ShadowHand(VecTask):
 
         # compute aggregate size
         max_agg_bodies = self.num_shadow_hand_bodies + 2
-        max_agg_shapes = self.num_shadow_hand_shapes + max_obj_shapes * 2
+        max_agg_shapes = self.num_shadow_hand_shapes + 2
 
-        self.shadow_hands = []
+        self.allegro_hands = []
         self.envs = []
 
         self.object_init_state = []
@@ -365,22 +318,9 @@ class ShadowHand(VecTask):
         self.object_indices = []
         self.goal_object_indices = []
 
-        self.fingertip_handles = [self.gym.find_asset_rigid_body_index(shadow_hand_asset, name) for name in self.fingertips]
-        self.palm_body_idx = self.gym.find_asset_rigid_body_index(shadow_hand_asset, "robot0:palm")
-
-        shadow_hand_rb_count = self.gym.get_asset_rigid_body_count(shadow_hand_asset)
-        # compute max object rb count across pool (Isaac Gym requires uniform rb count per env)
-        max_obj_rb_count = max(
-            self.gym.get_asset_rigid_body_count(object_assets[t][0]) for t in unique_types
-        )
-        self.object_rb_handles = list(range(shadow_hand_rb_count, shadow_hand_rb_count + max_obj_rb_count))
-
-        # assign per-env object types
-        env_type_indices = [_random.randrange(len(self.object_type_pool)) for _ in range(self.num_envs)]
-        self.env_object_type_idx = torch.tensor(env_type_indices, dtype=torch.long, device=self.device)
-        pen_pool_idx = self.object_type_pool.index("pen") if "pen" in self.object_type_pool else -1
-        self.is_pen = (self.env_object_type_idx == pen_pool_idx) if pen_pool_idx >= 0 \
-                      else torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        shadow_hand_rb_count = self.gym.get_asset_rigid_body_count(allegro_hand_asset)
+        object_rb_count = self.gym.get_asset_rigid_body_count(object_asset)
+        self.object_rb_handles = list(range(shadow_hand_rb_count, shadow_hand_rb_count + object_rb_count))
 
         for i in range(self.num_envs):
             # create env instance
@@ -392,23 +332,16 @@ class ShadowHand(VecTask):
                 self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
 
             # add hand - collision filter = -1 to use asset collision filters set in mjcf loader
-            shadow_hand_actor = self.gym.create_actor(env_ptr, shadow_hand_asset, shadow_hand_start_pose, "hand", i, -1, 0)
+            allegro_hand_actor = self.gym.create_actor(env_ptr, allegro_hand_asset, shadow_hand_start_pose, "hand", i, -1, 0)
             self.hand_start_states.append([shadow_hand_start_pose.p.x, shadow_hand_start_pose.p.y, shadow_hand_start_pose.p.z,
                                            shadow_hand_start_pose.r.x, shadow_hand_start_pose.r.y, shadow_hand_start_pose.r.z, shadow_hand_start_pose.r.w,
                                            0, 0, 0, 0, 0, 0])
-            self.gym.set_actor_dof_properties(env_ptr, shadow_hand_actor, shadow_hand_dof_props)
-            hand_idx = self.gym.get_actor_index(env_ptr, shadow_hand_actor, gymapi.DOMAIN_SIM)
+            self.gym.set_actor_dof_properties(env_ptr, allegro_hand_actor, shadow_hand_dof_props)
+            hand_idx = self.gym.get_actor_index(env_ptr, allegro_hand_actor, gymapi.DOMAIN_SIM)
             self.hand_indices.append(hand_idx)
 
-            # enable DOF force sensors, if needed
-            if self.obs_type == "full_state" or self.asymmetric_obs:
-                self.gym.enable_actor_dof_force_sensors(env_ptr, shadow_hand_actor)
-
-            # add object (per-env type)
-            obj_type = self.object_type_pool[env_type_indices[i]]
-            phys_asset, goal_asset_inst = object_assets[obj_type]
-
-            object_handle = self.gym.create_actor(env_ptr, phys_asset, object_start_pose, "object", i, 0, 0)
+            # add object
+            object_handle = self.gym.create_actor(env_ptr, object_asset, object_start_pose, "object", i, 0, 0)
             self.object_init_state.append([object_start_pose.p.x, object_start_pose.p.y, object_start_pose.p.z,
                                            object_start_pose.r.x, object_start_pose.r.y, object_start_pose.r.z, object_start_pose.r.w,
                                            0, 0, 0, 0, 0, 0])
@@ -416,18 +349,11 @@ class ShadowHand(VecTask):
             self.object_indices.append(object_idx)
 
             # add goal object
-            goal_handle = self.gym.create_actor(env_ptr, goal_asset_inst, goal_start_pose, "goal_object", i + self.num_envs, 0, 0)
+            goal_handle = self.gym.create_actor(env_ptr, goal_asset, goal_start_pose, "goal_object", i + self.num_envs, 0, 0)
             goal_object_idx = self.gym.get_actor_index(env_ptr, goal_handle, gymapi.DOMAIN_SIM)
             self.goal_object_indices.append(goal_object_idx)
 
-            # apply per-type random scale
-            scale_range = self.object_scale_ranges.get(obj_type,
-                          self.object_scale_ranges.get("default", [1.0, 1.0]))
-            actor_scale = scale_range[0] + (scale_range[1] - scale_range[0]) * _random.random()
-            self.gym.set_actor_scale(env_ptr, object_handle, actor_scale)
-            self.gym.set_actor_scale(env_ptr, goal_handle, actor_scale)
-
-            if obj_type in ("egg", "pen"):
+            if self.object_type != "block":
                 self.gym.set_rigid_body_color(
                     env_ptr, object_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.6, 0.72, 0.98))
                 self.gym.set_rigid_body_color(
@@ -437,10 +363,8 @@ class ShadowHand(VecTask):
                 self.gym.end_aggregate(env_ptr)
 
             self.envs.append(env_ptr)
-            self.shadow_hands.append(shadow_hand_actor)
+            self.allegro_hands.append(allegro_hand_actor)
 
-        # we are not using new mass values after DR when calculating random forces applied to an object,
-        # which should be ok as long as the randomization range is not too big
         object_rb_props = self.gym.get_actor_rigid_body_properties(env_ptr, object_handle)
         self.object_rb_masses = [prop.mass for prop in object_rb_props]
 
@@ -450,7 +374,6 @@ class ShadowHand(VecTask):
         self.goal_init_state = self.goal_states.clone()
         self.hand_start_states = to_torch(self.hand_start_states, device=self.device).view(self.num_envs, 13)
 
-        self.fingertip_handles = to_torch(self.fingertip_handles, dtype=torch.long, device=self.device)
         self.object_rb_handles = to_torch(self.object_rb_handles, dtype=torch.long, device=self.device)
         self.object_rb_masses = to_torch(self.object_rb_masses, dtype=torch.float, device=self.device)
 
@@ -458,22 +381,13 @@ class ShadowHand(VecTask):
         self.object_indices = to_torch(self.object_indices, dtype=torch.long, device=self.device)
         self.goal_object_indices = to_torch(self.goal_object_indices, dtype=torch.long, device=self.device)
 
-    def _fall_ref_pos(self):
-        """Position used as reference for fall detection. Override in subclasses where the base moves."""
-        return self.goal_pos
-
     def compute_reward(self, actions):
         self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
             self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes, self.consecutive_successes,
             self.max_episode_length, self.object_pos, self.object_rot, self.goal_pos, self.goal_rot,
             self.dist_reward_scale, self.rot_reward_scale, self.rot_eps, self.actions, self.action_penalty_scale,
             self.success_tolerance, self.reach_goal_bonus, self.fall_dist, self.fall_penalty,
-            self.max_consecutive_successes, self.av_factor, (self.object_type_pool == ["pen"]),
-            self.object_linvel, self.object_angvel, self.shadow_hand_dof_vel,
-            self.root_state_tensor[self.hand_indices, 0:3],
-            self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
-            self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
-            self._fall_ref_pos(),
+            self.max_consecutive_successes, self.av_factor, (self.object_type == "pen")
         )
 
         self.extras['consecutive_successes'] = self.consecutive_successes.mean()
@@ -508,77 +422,42 @@ class ShadowHand(VecTask):
         self.goal_pos = self.goal_states[:, 0:3]
         self.goal_rot = self.goal_states[:, 3:7]
 
-        self.fingertip_state = self.rigid_body_states[:, self.fingertip_handles][:, :, 0:13]
-        self.fingertip_pos = self.rigid_body_states[:, self.fingertip_handles][:, :, 0:3]
-
-        if self.obs_type == "openai":
-            self.compute_fingertip_observations(True)
-        elif self.obs_type == "full_no_vel":
+        if self.obs_type == "full_no_vel":
             self.compute_full_observations(True)
         elif self.obs_type == "full":
             self.compute_full_observations()
         elif self.obs_type == "full_state":
-            self.compute_full_state()
+             self.compute_full_state()
         else:
             print("Unknown observations type!")
 
         if self.asymmetric_obs:
             self.compute_full_state(True)
 
-    def compute_fingertip_observations(self, no_vel=False):
-        if no_vel:
-            # Per https://arxiv.org/pdf/1808.00177.pdf Table 2
-            #   Fingertip positions
-            #   Object Position, but not orientation
-            #   Relative target orientation
-
-            # 3*self.num_fingertips = 15
-            self.obs_buf[:, 0:15] = self.fingertip_pos.reshape(self.num_envs, 15)
-            self.obs_buf[:, 15:18] = self.object_pose[:, 0:3]
-            self.obs_buf[:, 18:22] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
-
-            self.obs_buf[:, 22:42] = self.actions
-        else:
-            # 13*self.num_fingertips = 65
-            self.obs_buf[:, 0:65] = self.fingertip_state.reshape(self.num_envs, 65)
-            self.obs_buf[:, 65:72] = self.object_pose
-            self.obs_buf[:, 72:75] = self.object_linvel
-            self.obs_buf[:, 75:78] = self.vel_obs_scale * self.object_angvel
-
-            self.obs_buf[:, 78:85] = self.goal_pose
-            self.obs_buf[:, 85:89] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
-
-            self.obs_buf[:, 89:109] = self.actions
-
     def compute_full_observations(self, no_vel=False):
         if no_vel:
             self.obs_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
                                                                    self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
 
-            self.obs_buf[:, 24:31] = self.object_pose
-            self.obs_buf[:, 31:38] = self.goal_pose
-            self.obs_buf[:, 38:42] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
+            self.obs_buf[:, 16:23] = self.object_pose
+            self.obs_buf[:, 23:30] = self.goal_pose
+            self.obs_buf[:, 30:34] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            # 3*self.num_fingertips = 15
-            self.obs_buf[:, 42:57] = self.fingertip_pos.reshape(self.num_envs, 15)
-
-            self.obs_buf[:, 57:77] = self.actions
+            self.obs_buf[:, 34:50] = self.actions
         else:
             self.obs_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
                                                                    self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
             self.obs_buf[:, self.num_shadow_hand_dofs:2*self.num_shadow_hand_dofs] = self.vel_obs_scale * self.shadow_hand_dof_vel
 
-            self.obs_buf[:, 48:55] = self.object_pose
-            self.obs_buf[:, 55:58] = self.object_linvel
-            self.obs_buf[:, 58:61] = self.vel_obs_scale * self.object_angvel
+            # 2*16 = 32 -16
+            self.obs_buf[:, 32:39] = self.object_pose
+            self.obs_buf[:, 39:42] = self.object_linvel
+            self.obs_buf[:, 42:45] = self.vel_obs_scale * self.object_angvel
 
-            self.obs_buf[:, 61:68] = self.goal_pose
-            self.obs_buf[:, 68:72] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
+            self.obs_buf[:, 45:52] = self.goal_pose
+            self.obs_buf[:, 52:56] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            # 13*self.num_fingertips = 65
-            self.obs_buf[:, 72:137] = self.fingertip_state.reshape(self.num_envs, 65)
-
-            self.obs_buf[:, 137:157] = self.actions
+            self.obs_buf[:, 56:72] = self.actions
 
     def compute_full_state(self, asymm_obs=False):
         if asymm_obs:
@@ -587,67 +466,47 @@ class ShadowHand(VecTask):
             self.states_buf[:, self.num_shadow_hand_dofs:2*self.num_shadow_hand_dofs] = self.vel_obs_scale * self.shadow_hand_dof_vel
             self.states_buf[:, 2*self.num_shadow_hand_dofs:3*self.num_shadow_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
 
-            obj_obs_start = 3*self.num_shadow_hand_dofs  # 72
+            obj_obs_start = 3*self.num_shadow_hand_dofs  # 48
             self.states_buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
             self.states_buf[:, obj_obs_start + 7:obj_obs_start + 10] = self.object_linvel
             self.states_buf[:, obj_obs_start + 10:obj_obs_start + 13] = self.vel_obs_scale * self.object_angvel
 
-            goal_obs_start = obj_obs_start + 13  # 85
+            goal_obs_start = obj_obs_start + 13  # 61
             self.states_buf[:, goal_obs_start:goal_obs_start + 7] = self.goal_pose
             self.states_buf[:, goal_obs_start + 7:goal_obs_start + 11] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            # fingertip observations, state(pose and vel) + force-torque sensors
-            num_ft_states = 13 * self.num_fingertips  # 65
-            num_ft_force_torques = 6 * self.num_fingertips  # 30
-
-            fingertip_obs_start = goal_obs_start + 11  # 96
-            self.states_buf[:, fingertip_obs_start:fingertip_obs_start + num_ft_states] = self.fingertip_state.reshape(self.num_envs, num_ft_states)
-            self.states_buf[:, fingertip_obs_start + num_ft_states:fingertip_obs_start + num_ft_states +
-                            num_ft_force_torques] = self.force_torque_obs_scale * self.vec_sensor_tensor
+            fingertip_obs_start = goal_obs_start + 11  # 72
 
             # obs_end = 96 + 65 + 30 = 191
-            # obs_total = obs_end + num_actions = 211
-            obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
+            # obs_total = obs_end + num_actions = 72 + 16 = 88
+            obs_end = fingertip_obs_start
             self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
         else:
             self.obs_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
-                                                                   self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
+                                                                      self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
             self.obs_buf[:, self.num_shadow_hand_dofs:2*self.num_shadow_hand_dofs] = self.vel_obs_scale * self.shadow_hand_dof_vel
             self.obs_buf[:, 2*self.num_shadow_hand_dofs:3*self.num_shadow_hand_dofs] = self.force_torque_obs_scale * self.dof_force_tensor
 
-            obj_obs_start = 3*self.num_shadow_hand_dofs  # 72
+            obj_obs_start = 3*self.num_shadow_hand_dofs  # 48
             self.obs_buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
             self.obs_buf[:, obj_obs_start + 7:obj_obs_start + 10] = self.object_linvel
             self.obs_buf[:, obj_obs_start + 10:obj_obs_start + 13] = self.vel_obs_scale * self.object_angvel
 
-            goal_obs_start = obj_obs_start + 13  # 85
+            goal_obs_start = obj_obs_start + 13  # 61
             self.obs_buf[:, goal_obs_start:goal_obs_start + 7] = self.goal_pose
             self.obs_buf[:, goal_obs_start + 7:goal_obs_start + 11] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            # fingertip observations, state(pose and vel) + force-torque sensors
-            num_ft_states = 13 * self.num_fingertips  # 65
-            num_ft_force_torques = 6 * self.num_fingertips  # 30
-
-            fingertip_obs_start = goal_obs_start + 11  # 96
-            self.obs_buf[:, fingertip_obs_start:fingertip_obs_start + num_ft_states] = self.fingertip_state.reshape(self.num_envs, num_ft_states)
-            self.obs_buf[:, fingertip_obs_start + num_ft_states:fingertip_obs_start + num_ft_states +
-                         num_ft_force_torques] = self.force_torque_obs_scale * self.vec_sensor_tensor
+            fingertip_obs_start = goal_obs_start + 11  # 72
 
             # obs_end = 96 + 65 + 30 = 191
-            # obs_total = obs_end + num_actions = 211
-            obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
+            # obs_total = obs_end + num_actions = 72 + 16 = 88
+            obs_end = fingertip_obs_start #+ num_ft_states + num_ft_force_torques
             self.obs_buf[:, obs_end:obs_end + self.num_actions] = self.actions
 
     def reset_target_pose(self, env_ids, apply_reset=False):
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), 4), device=self.device)
 
         new_rot = randomize_rotation(rand_floats[:, 0], rand_floats[:, 1], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
-        pen_mask = self.is_pen[env_ids]
-        if pen_mask.any():
-            pen_rot = randomize_rotation_pen(rand_floats[:, 0], rand_floats[:, 1], torch.tensor(0.3),
-                                             self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids],
-                                             self.z_unit_tensor[env_ids])
-            new_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_rot)
 
         self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
         self.goal_states[env_ids, 3:7] = new_rot
@@ -663,10 +522,6 @@ class ShadowHand(VecTask):
         self.reset_goal_buf[env_ids] = 0
 
     def reset_idx(self, env_ids, goal_env_ids):
-        # randomization can happen only at reset time, since it can reset actor positions on GPU
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
-
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_shadow_hand_dofs * 2 + 5), device=self.device)
 
@@ -684,12 +539,10 @@ class ShadowHand(VecTask):
             self.reset_position_noise * rand_floats[:, self.up_axis_idx]
 
         new_object_rot = randomize_rotation(rand_floats[:, 3], rand_floats[:, 4], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
-        pen_mask = self.is_pen[env_ids]
-        if pen_mask.any():
+        if self.object_type == "pen":
             rand_angle_y = torch.tensor(0.3)
-            pen_rot = randomize_rotation_pen(rand_floats[:, 3], rand_floats[:, 4], rand_angle_y,
-                                             self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids], self.z_unit_tensor[env_ids])
-            new_object_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_object_rot)
+            new_object_rot = randomize_rotation_pen(rand_floats[:, 3], rand_floats[:, 4], rand_angle_y,
+                                                    self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids], self.z_unit_tensor[env_ids])
 
         self.root_state_tensor[self.object_indices[env_ids], 3:7] = new_object_rot
         self.root_state_tensor[self.object_indices[env_ids], 7:13] = torch.zeros_like(self.root_state_tensor[self.object_indices[env_ids], 7:13])
@@ -737,7 +590,8 @@ class ShadowHand(VecTask):
         # if only goals need reset, then call set API
         if len(goal_env_ids) > 0 and len(env_ids) == 0:
             self.reset_target_pose(goal_env_ids, apply_reset=True)
-        # if goals need reset in addition to other envs, call set API in reset_idx()
+
+        # if goals need reset in addition to other envs, call set API in reset()
         elif len(goal_env_ids) > 0:
             self.reset_target_pose(goal_env_ids)
 
@@ -813,15 +667,10 @@ def compute_hand_reward(
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
     actions, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
-    fall_penalty: float, max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool,
-    object_linvel, object_angvel, dof_vel, hand_pos,
-    obj_linvel_penalty_scale: float, obj_angvel_penalty_scale: float,
-    dof_vel_penalty_scale: float, palm_dist_penalty_scale: float,
-    fall_ref_pos
+    fall_penalty: float, max_consecutive_successes: int, av_factor: float, ignore_z_rot: bool
 ):
     # Distance from the hand to the object
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
-    fall_check_dist = torch.norm(object_pos - fall_ref_pos, p=2, dim=-1)
 
     if ignore_z_rot:
         success_tolerance = 2.0 * success_tolerance
@@ -835,18 +684,8 @@ def compute_hand_reward(
 
     action_penalty = torch.sum(actions ** 2, dim=-1)
 
-    obj_linvel_penalty = torch.sum(object_linvel ** 2, dim=-1)
-    obj_angvel_penalty = torch.sum(object_angvel ** 2, dim=-1)
-    dof_vel_penalty = torch.sum(dof_vel ** 2, dim=-1)
-    palm_dist_penalty = torch.norm(object_pos - hand_pos, p=2, dim=-1)
-
     # Total reward is: position distance + orientation alignment + action regularization + success bonus + fall penalty
-    reward = (dist_rew + rot_rew
-              + action_penalty * action_penalty_scale
-              + obj_linvel_penalty * obj_linvel_penalty_scale
-              + obj_angvel_penalty * obj_angvel_penalty_scale
-              + dof_vel_penalty * dof_vel_penalty_scale
-              + palm_dist_penalty * palm_dist_penalty_scale)
+    reward = dist_rew + rot_rew + action_penalty * action_penalty_scale
 
     # Find out which envs hit the goal and update successes count
     goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)
@@ -855,20 +694,22 @@ def compute_hand_reward(
     # Success bonus: orientation is within `success_tolerance` of goal orientation
     reward = torch.where(goal_resets == 1, reward + reach_goal_bonus, reward)
 
-    # Fall penalty: distance to the fall reference (goal pos by default, palm pos for tilted) exceeds threshold
-    reward = torch.where(fall_check_dist >= fall_dist, reward + fall_penalty, reward)
+    # Fall penalty: distance to the goal is larger than a threshold
+    reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
 
     # Check env termination conditions, including maximum success number
-    resets = torch.where(fall_check_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
+    resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_consecutive_successes > 0
         progress_buf = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.zeros_like(progress_buf), progress_buf)
         resets = torch.where(successes >= max_consecutive_successes, torch.ones_like(resets), resets)
-    resets = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(resets), resets)
+
+    timed_out = progress_buf >= max_episode_length - 1
+    resets = torch.where(timed_out, torch.ones_like(resets), resets)
 
     # Apply penalty for not reaching the goal
     if max_consecutive_successes > 0:
-        reward = torch.where(progress_buf >= max_episode_length - 1, reward + 0.5 * fall_penalty, reward)
+        reward = torch.where(timed_out, reward + 0.5 * fall_penalty, reward)
 
     num_resets = torch.sum(resets)
     finished_cons_successes = torch.sum(successes * resets.float())

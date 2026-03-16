@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 1200
+  episodeLength: 1800
   enableDebugVis: False
   aggregateMode: 1
 
@@ -40,16 +40,25 @@ env:
   distRewardScale: -10.0
   rotRewardScale: 1.0
   rotEps: 0.1
-  actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
+  actionPenaltyScale: -0.002
+  reachGoalBonus: 300
   fallDistance: 0.24
-  fallPenalty: -20.0
+  fallPenalty: -300.0
 
   # Quasi-static manipulation penalties (negative = penalty)
-  objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.005
-  dofVelPenaltyScale: -0.001
-  palmDistPenaltyScale: -0.5
+  # Note: linvel/angvel penalties apply to object velocity *relative to palm* (see ShadowHandTilted.compute_reward)
+  objLinvelPenaltyScale: -0.5
+  objAngvelPenaltyScale: -0.02
+  dofVelPenaltyScale: -0.01
+  palmDistPenaltyScale: -1.0
+
+  # Survive reward: bonus for holding the object past surviveStartFrame steps
+  surviveRewardScale: 0.01
+  surviveStartFrame: 400
+
+  # Wrist acceleration penalty: penalizes rapid wrist action changes (discourages tossing/flicking)
+  wristAccelPenaltyScale: -0.8
+  wristDofIndices: [0, 1]  # WRJ1 and WRJ0 are the first two DOFs in shadow_hand.xml
 
   objectType: "block" # can be block, egg or pen
   objectTypePool: []          # empty = single-type training using objectType above
@@ -60,12 +69,12 @@ env:
     default: [0.8, 1.2]      # applied to all ycb_* types
   observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
-  successTolerance: 0.1
+  successTolerance: 0.2
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
   # Base rotation parameters (rad/s)
-  baseAngVelMin: 0.20
+  baseAngVelMin: 0.10
   baseAngVelMax: 0.30
 
   asset:
