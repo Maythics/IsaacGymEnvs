@@ -45,6 +45,8 @@ from .quadcopter import Quadcopter
 from .shadow_hand import ShadowHand
 from .shadow_hand_tilted import ShadowHandTilted
 from .shadow_stable_grasp import ShadowStableGrasp
+from .shadow_push import ShadowPush
+from .shadow_flip import ShadowFlip
 from .allegro_hand import AllegroHand
 from .dextreme.allegro_hand_dextreme import AllegroHandDextremeManualDR, AllegroHandDextremeADR
 from .trifinger import Trifinger
@@ -114,5 +116,7 @@ isaacgym_task_map = {
     "ShadowHand": ShadowHand,
     "ShadowHandTilted": ShadowHandTilted,
     "ShadowStableGrasp": ShadowStableGrasp,
+    "ShadowPush": ShadowPush,
+    "ShadowFlip": ShadowFlip,
     "Trifinger": Trifinger,
 }
