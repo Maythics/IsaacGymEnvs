@@ -20,6 +20,7 @@ env:
   useRelativeControl: False
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
+  actionSpeedScale: 1.0  # multiplier on finger movement speed (1.0 = normal, 0.5 = half speed)
   controlFrequencyInv: 1 # 60 Hz
 
   startPositionNoise: 0.01
@@ -31,8 +32,8 @@ env:
   resetDofVelRandomInterval: 0.0
 
   # Random forces applied to the object
-  forceScale: 0.0
-  forceProbRange: [0.001, 0.1]
+  forceScale: 0
+  forceProbRange: [0.01, 0.1]
   forceDecay: 0.99
   forceDecayInterval: 0.08
 
@@ -47,9 +48,14 @@ env:
 
   # Quasi-static manipulation penalties (negative = penalty)
   objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.005
+  objAngvelPenaltyScale: -0.05
   dofVelPenaltyScale: -0.001
   palmDistPenaltyScale: -0.5
+  # Overspeed thresholds — penalty is zero below limit, grows exp above it
+  # formula: -scale * max(0, exp(|speed| - limit) - 1)
+  objLinvelLimit: 0.4      # m/s   — scalar speed of object
+  objAngvelLimit: 8     #10  # rad/s — scalar angular speed of object
+  dofVelLimit: 3         # rad/s — per-joint angular speed threshold
 
   objectType: "block" # can be block, egg or pen
   objectTypePool: []          # empty = single-type training using objectType above
@@ -57,13 +63,13 @@ env:
                               #        "ycb_orange","ycb_peach","ycb_pear","ycb_plum",
                               #        "ycb_tomato_soup_can"]
   objectScaleRanges:
-    block: [1, 1]
-    egg: [0.6, 1.4]
+    block: [0.9, 1.1]
+    egg: [0.8, 1.2]
     pen: [0.6, 1.2]
     default: [0.8, 1.2]      # applied to all ycb_* types
   observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
-  successTolerance: 0.1
+  successTolerance: 0.3
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 

@@ -1,11 +1,9 @@
-# used to create the object
-name: ShadowFlip
+name: XHandHand
 
 physics_engine: ${..physics_engine}
 
-# if given, will override the device setting in gym.
 env:
-  numEnvs: ${resolve_default:16384,${...num_envs}}
+  numEnvs: ${resolve_default:8192,${...num_envs}}
   envSpacing: 0.75
   episodeLength: 600
   enableDebugVis: False
@@ -20,6 +18,7 @@ env:
   useRelativeControl: False
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
+  actionSpeedScale: 1.0
   controlFrequencyInv: 1 # 60 Hz
 
   startPositionNoise: 0.01
@@ -36,57 +35,38 @@ env:
   forceDecay: 0.99
   forceDecayInterval: 0.08
 
-  # Shared reward params (base class compatibility)
-  distRewardScale: 0.0
-  rotRewardScale: 0.0
+  # Rewards
+  distRewardScale: -10.0
+  rotRewardScale: 1.0
   rotEps: 0.1
   actionPenaltyScale: -0.0002
   reachGoalBonus: 250
   fallDistance: 0.24
   fallPenalty: 0.0
 
-  # Quasi-static manipulation penalties (negative = penalty)
+  # Quasi-static manipulation penalties
   objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.005
+  objAngvelPenaltyScale: -0.05
   dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: -0.5
+  objLinvelLimit: 0.4
+  objAngvelLimit: 8.0
+  dofVelLimit: 3.0
 
-  # Flip-specific: orientation reward toward 90-deg target
-  orientRewardScale: 1.0
-  orientEps: 0.1
-
-  # Flip-specific: time and rotation penalties to discourage wasted motion
-  timePenalty: -0.1                  # constant cost per step → pressures fast success
-  excessRotationPenaltyScale: -0.005 # penalty = total_rotation_so_far * scale (grows with spin)
-
-  # Flip-specific: over-flip penalty (negative scale = penalty)
-  overFlipMargin: 0.2        # radians buffer above 90° before penalty kicks in (~11°)
-  overFlipPenaltyScale: -1.0 # proportional penalty per radian past 90°+margin
-
-  # Flip-specific: fingertip proximity reward
-  fingertipRewardScale: 0.1  # scale for 1/(min_fingertip_dist + eps) reward
-  fingertipEps: 0.1          # epsilon to avoid division by zero
-
-  # Flip-specific: settling phase
-  settleFrames: 30           # frames the block must stay near target to succeed
-  flipTolerance: 0.4         # radians (~23 deg) for flip detection and stable bonus
-  stableBonusPerFrame: 0.5   # reward per settling frame near target
-
-  # Base class compatibility (not used by ShadowFlip reward logic)
-  successTolerance: 0.1
-  palmDistPenaltyScale: 0.0
-
-  objectType: "block"        # block only (cube has stable flipped states)
+  objectType: "block"
   objectTypePool: []
   objectScaleRanges:
     block: [1, 1]
+    egg: [0.8, 1.2]
+    pen: [0.6, 1.2]
     default: [0.8, 1.2]
   observationType: "full_state"
   asymmetric_observations: False
+  successTolerance: 0.3
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
   asset:
-    assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"
     assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
     assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
     assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
@@ -115,15 +95,6 @@ task:
     actor_params:
       hand:
         color: True
-        tendon_properties:
-          damping:
-            range: [0.3, 3.0]
-            operation: "scaling"
-            distribution: "loguniform"
-          stiffness:
-            range: [0.75, 1.5]
-            operation: "scaling"
-            distribution: "loguniform"
         dof_properties:
           damping:
             range: [0.3, 3.0]
@@ -179,7 +150,7 @@ sim:
     use_gpu: ${contains:"cuda",${....sim_device}}
     num_position_iterations: 8
     num_velocity_iterations: 0
-    max_gpu_contact_pairs: 8388608 # 8*1024*1024
+    max_gpu_contact_pairs: 8388608
     num_subscenes: ${....num_subscenes}
     contact_offset: 0.002
     rest_offset: 0.0

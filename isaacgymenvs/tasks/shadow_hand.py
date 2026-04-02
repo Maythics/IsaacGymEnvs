@@ -75,10 +75,14 @@ class ShadowHand(VecTask):
         self.obj_angvel_penalty_scale = self.cfg["env"].get("objAngvelPenaltyScale", 0.0)
         self.dof_vel_penalty_scale = self.cfg["env"].get("dofVelPenaltyScale", 0.0)
         self.palm_dist_penalty_scale = self.cfg["env"].get("palmDistPenaltyScale", 0.0)
+        self.obj_linvel_limit = self.cfg["env"].get("objLinvelLimit", 0.3)
+        self.obj_angvel_limit = self.cfg["env"].get("objAngvelLimit", 1.5)
+        self.dof_vel_limit = self.cfg["env"].get("dofVelLimit", 2.0)
 
         self.shadow_hand_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
+        self.action_speed_scale = self.cfg["env"].get("actionSpeedScale", 1.0)
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -382,6 +386,8 @@ class ShadowHand(VecTask):
         self.is_pen = (self.env_object_type_idx == pen_pool_idx) if pen_pool_idx >= 0 \
                       else torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
+        self.env_object_scales_list = []
+
         for i in range(self.num_envs):
             # create env instance
             env_ptr = self.gym.create_env(
@@ -426,6 +432,7 @@ class ShadowHand(VecTask):
             actor_scale = scale_range[0] + (scale_range[1] - scale_range[0]) * _random.random()
             self.gym.set_actor_scale(env_ptr, object_handle, actor_scale)
             self.gym.set_actor_scale(env_ptr, goal_handle, actor_scale)
+            self.env_object_scales_list.append(actor_scale)
 
             if obj_type in ("egg", "pen"):
                 self.gym.set_rigid_body_color(
@@ -457,6 +464,7 @@ class ShadowHand(VecTask):
         self.hand_indices = to_torch(self.hand_indices, dtype=torch.long, device=self.device)
         self.object_indices = to_torch(self.object_indices, dtype=torch.long, device=self.device)
         self.goal_object_indices = to_torch(self.goal_object_indices, dtype=torch.long, device=self.device)
+        self.env_object_scales = to_torch(self.env_object_scales_list, dtype=torch.float, device=self.device)
 
     def _fall_ref_pos(self):
         """Position used as reference for fall detection. Override in subclasses where the base moves."""
@@ -473,6 +481,7 @@ class ShadowHand(VecTask):
             self.root_state_tensor[self.hand_indices, 0:3],
             self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
             self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
+            self.obj_linvel_limit, self.obj_angvel_limit, self.dof_vel_limit,
             self._fall_ref_pos(),
         )
 
@@ -746,14 +755,14 @@ class ShadowHand(VecTask):
 
         self.actions = actions.clone().to(self.device)
         if self.use_relative_control:
-            targets = self.prev_targets[:, self.actuated_dof_indices] + self.shadow_hand_dof_speed_scale * self.dt * self.actions
+            targets = self.prev_targets[:, self.actuated_dof_indices] + self.shadow_hand_dof_speed_scale * self.dt * self.action_speed_scale * self.actions
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(targets,
                                                                           self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
         else:
-            self.cur_targets[:, self.actuated_dof_indices] = scale(self.actions,
-                                                                   self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
-            self.cur_targets[:, self.actuated_dof_indices] = self.act_moving_average * self.cur_targets[:,
-                                                                                                        self.actuated_dof_indices] + (1.0 - self.act_moving_average) * self.prev_targets[:, self.actuated_dof_indices]
+            new_targets = scale(self.actions,
+                                self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
+            eff_moving_average = self.act_moving_average * self.action_speed_scale
+            self.cur_targets[:, self.actuated_dof_indices] = eff_moving_average * new_targets + (1.0 - eff_moving_average) * self.prev_targets[:, self.actuated_dof_indices]
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(self.cur_targets[:, self.actuated_dof_indices],
                                                                           self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
 
@@ -817,6 +826,7 @@ def compute_hand_reward(
     object_linvel, object_angvel, dof_vel, hand_pos,
     obj_linvel_penalty_scale: float, obj_angvel_penalty_scale: float,
     dof_vel_penalty_scale: float, palm_dist_penalty_scale: float,
+    obj_linvel_limit: float, obj_angvel_limit: float, dof_vel_limit: float,
     fall_ref_pos
 ):
     # Distance from the hand to the object
@@ -835,9 +845,15 @@ def compute_hand_reward(
 
     action_penalty = torch.sum(actions ** 2, dim=-1)
 
-    obj_linvel_penalty = torch.sum(object_linvel ** 2, dim=-1)
-    obj_angvel_penalty = torch.sum(object_angvel ** 2, dim=-1)
-    dof_vel_penalty = torch.sum(dof_vel ** 2, dim=-1)
+    # Per-joint overspeed penalty: zero below limit, grows exp above it
+    # formula: sum_j max(0, exp(|vel_j| - limit) - 1)
+    dof_vel_penalty = torch.sum(
+        torch.clamp(torch.exp(torch.abs(dof_vel) - dof_vel_limit) - 1.0, min=0.0, max=100.0), dim=-1)
+    # Object overspeed: applied to scalar L2 speed
+    obj_linspeed = torch.norm(object_linvel, p=2, dim=-1)
+    obj_linvel_penalty = torch.clamp(torch.exp(obj_linspeed - obj_linvel_limit) - 1.0, min=0.0, max=500.0)
+    obj_angspeed = torch.norm(object_angvel, p=2, dim=-1)
+    obj_angvel_penalty = torch.clamp(torch.exp(obj_angspeed - obj_angvel_limit) - 1.0, min=0.0, max=1000.0)
     palm_dist_penalty = torch.norm(object_pos - hand_pos, p=2, dim=-1)
 
     # Total reward is: position distance + orientation alignment + action regularization + success bonus + fall penalty

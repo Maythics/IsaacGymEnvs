@@ -26,34 +26,32 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""XPush: in-hand repositioning task for the XHand robot.
+
+Mirrors ShadowPush but inherits from XHandHand. Each episode a random XY push
+direction is drawn; the goal advances along that direction on every goal reset.
+
+Observation space: 175 dims (full_state, same as XHandHand).
+Action space: 14 dims.
+"""
+
 import math
 import torch
 
 from isaacgym import gymtorch
-from isaacgymenvs.tasks.shadow_hand import ShadowHand
+from isaacgymenvs.tasks.xhand_hand import XHandHand
 from isaacgymenvs.utils.torch_jit_utils import quat_from_angle_axis, torch_rand_float
 
 
-class ShadowPush(ShadowHand):
-    """In-hand re-positioning task: translate an object along a per-episode trajectory
-    within the palm workspace without flipping it.
+class XHandPush(XHandHand):
+    """In-hand repositioning (push) task for the XHand.
 
-    Each episode a random XY push direction is drawn. The first goal is a small random
-    displacement; on every subsequent goal reset the target advances by pushStepSize
-    along the fixed direction, creating a continuous push trajectory.
-
-    Observation space: 211 dims (full_state, identical to ShadowHand) — compatible with
-    existing checkpoints. The advancing goal position in obs[85:88] implicitly encodes
-    the trajectory direction.
-    The goal_pose slot [85:92] stores the target position and a yaw-only quaternion;
-    [92:96] holds quat_mul(object_rot, conj(goal_yaw_rot)).
-
-    Action space: 20 dims (same as ShadowHand).
+    Identical logic to ShadowPush — only the parent class differs.
     """
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless,
                  virtual_screen_capture, force_render):
-        # Read push-specific config before calling super (super reads shared params)
+        # Read push-specific config before calling super
         self.yaw_reward_scale = cfg["env"].get("yawRewardScale", 1.0)
         self.yaw_eps = cfg["env"].get("yawEps", 0.1)
         self.pos_success_tolerance = cfg["env"].get("posSuccessTolerance", 0.02)
@@ -64,7 +62,7 @@ class ShadowPush(ShadowHand):
         self.flip_angle = cfg["env"].get("flipAngle", math.pi / 2.0)
         self.push_step_size = cfg["env"].get("pushStepSize", 0.015)
 
-        # Force full_state obs type — guarantees 211-dim observation vector
+        # Force full_state obs type
         cfg["env"]["observationType"] = "full_state"
 
         super().__init__(cfg, rl_device, sim_device, graphics_device_id, headless,
@@ -72,8 +70,7 @@ class ShadowPush(ShadowHand):
 
         # Per-environment push direction: unit XY vector, fixed within each episode
         self.push_direction = torch.zeros(
-            (self.num_envs, 3), dtype=torch.float, device=self.device
-        )
+            (self.num_envs, 3), dtype=torch.float, device=self.device)
 
     # ------------------------------------------------------------------
     # Goal reset: sample nearby position + yaw target
@@ -95,12 +92,11 @@ class ShadowPush(ShadowHand):
             # Goal-only reset: advance previous goal along the stored push direction
             goal_pos = self.goal_states[env_ids, 0:3].clone()
             goal_pos = goal_pos + self.push_step_size * self.push_direction[env_ids]
-            goal_yaw_quat = self.goal_states[env_ids, 3:7].clone()  # keep yaw
+            goal_yaw_quat = self.goal_states[env_ids, 3:7].clone()
 
         self.goal_states[env_ids, 0:3] = goal_pos
         self.goal_states[env_ids, 3:7] = goal_yaw_quat
 
-        # Update visual goal object (displayed offset from logical goal position)
         self.root_state_tensor[self.goal_object_indices[env_ids], 0:3] = \
             goal_pos + self.goal_displacement_tensor
         self.root_state_tensor[self.goal_object_indices[env_ids], 3:7] = goal_yaw_quat
@@ -121,11 +117,8 @@ class ShadowPush(ShadowHand):
     # ------------------------------------------------------------------
 
     def reset_idx(self, env_ids, goal_env_ids):
-        # Parent handles DOF reset, goal pose (via our reset_target_pose), and
-        # object init state — including a set_actor_root_state_tensor_indexed call.
         super().reset_idx(env_ids, goal_env_ids)
 
-        # Override the object rotation set by parent: yaw-only (object starts upright)
         n = len(env_ids)
         rand_yaw = torch_rand_float(-math.pi, math.pi, (n, 1), device=self.device)
         new_object_rot = quat_from_angle_axis(rand_yaw[:, 0], self.z_unit_tensor[env_ids])
@@ -141,7 +134,6 @@ class ShadowPush(ShadowHand):
             len(obj_indices),
         )
 
-        # Sample random XY push direction for this episode
         angle = torch_rand_float(0.0, 2.0 * math.pi, (n, 1), device=self.device)[:, 0]
         self.push_direction[env_ids, 0] = torch.cos(angle)
         self.push_direction[env_ids, 1] = torch.sin(angle)
@@ -152,8 +144,8 @@ class ShadowPush(ShadowHand):
     # ------------------------------------------------------------------
 
     def compute_reward(self, actions):
-        self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], \
-            self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = \
+        (self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:],
+         self.progress_buf[:], self.successes[:], self.consecutive_successes[:]) = \
             compute_push_reward(
                 self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf,
                 self.successes, self.consecutive_successes,
@@ -165,7 +157,7 @@ class ShadowPush(ShadowHand):
                 self.reach_goal_bonus, self.fall_dist, self.fall_penalty,
                 self.upright_penalty_scale, self.flip_angle,
                 self.max_consecutive_successes, self.av_factor,
-                self.object_linvel, self.object_angvel, self.shadow_hand_dof_vel,
+                self.object_linvel, self.object_angvel, self.xhand_dof_vel,
                 self.rigid_body_states[:, self.palm_body_idx, 0:3],
                 self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
                 self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
@@ -185,7 +177,7 @@ class ShadowPush(ShadowHand):
 
 
 # ---------------------------------------------------------------------------
-# JIT reward function
+# JIT reward function (identical to ShadowPush)
 # ---------------------------------------------------------------------------
 
 @torch.jit.script
@@ -217,23 +209,23 @@ def compute_push_reward(
     yaw_diff = torch.atan2(torch.sin(obj_yaw - goal_yaw), torch.cos(obj_yaw - goal_yaw))
     yaw_rew = 1.0 / (torch.abs(yaw_diff) + yaw_eps) * yaw_reward_scale
 
-    # --- Upright penalty: penalize roll and pitch of the object ---
+    # --- Upright penalty ---
     roll  = torch.atan2(2.0 * (ow * ox + oy * oz), 1.0 - 2.0 * (ox * ox + oy * oy))
     pitch = torch.asin(torch.clamp(2.0 * (ow * oy - oz * ox), -1.0, 1.0))
     upright_penalty = (roll ** 2 + pitch ** 2) * upright_penalty_scale
 
     # --- Auxiliary penalties ---
-    action_penalty      = torch.sum(actions      ** 2, dim=-1) * action_penalty_scale
-    obj_linvel_penalty  = torch.sum(object_linvel ** 2, dim=-1) * obj_linvel_penalty_scale
-    obj_angvel_penalty  = torch.sum(object_angvel ** 2, dim=-1) * obj_angvel_penalty_scale
-    dof_vel_penalty     = torch.sum(dof_vel       ** 2, dim=-1) * dof_vel_penalty_scale
-    palm_dist_penalty   = torch.norm(object_pos - hand_pos, p=2, dim=-1) * palm_dist_penalty_scale
+    action_penalty     = torch.sum(actions       ** 2, dim=-1) * action_penalty_scale
+    obj_linvel_penalty = torch.sum(object_linvel  ** 2, dim=-1) * obj_linvel_penalty_scale
+    obj_angvel_penalty = torch.sum(object_angvel  ** 2, dim=-1) * obj_angvel_penalty_scale
+    dof_vel_penalty    = torch.sum(dof_vel         ** 2, dim=-1) * dof_vel_penalty_scale
+    palm_dist_penalty  = torch.norm(object_pos - hand_pos, p=2, dim=-1) * palm_dist_penalty_scale
 
     reward = (dist_rew + yaw_rew + upright_penalty
               + action_penalty + obj_linvel_penalty + obj_angvel_penalty
               + dof_vel_penalty + palm_dist_penalty)
 
-    # --- Success condition: position AND yaw both within tolerance ---
+    # --- Success condition ---
     pos_ok = goal_dist <= pos_success_tolerance
     yaw_ok = torch.abs(yaw_diff) <= yaw_success_tolerance
     goal_resets = torch.where(pos_ok & yaw_ok, torch.ones_like(reset_goal_buf), reset_goal_buf)
@@ -241,7 +233,7 @@ def compute_push_reward(
 
     reward = torch.where(goal_resets == 1, reward + reach_goal_bonus, reward)
 
-    # --- Fall check: object too far from hand ---
+    # --- Fall check ---
     fall_check_dist = torch.norm(object_pos - hand_pos, p=2, dim=-1)
     reward = torch.where(fall_check_dist >= fall_dist, reward + fall_penalty, reward)
 
@@ -254,9 +246,11 @@ def compute_push_reward(
 
     if max_consecutive_successes > 0:
         progress_buf = torch.where(pos_ok & yaw_ok, torch.zeros_like(progress_buf), progress_buf)
-        resets = torch.where(successes >= max_consecutive_successes, torch.ones_like(resets), resets)
+        resets = torch.where(
+            successes >= max_consecutive_successes, torch.ones_like(resets), resets)
 
-    resets = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(resets), resets)
+    resets = torch.where(
+        progress_buf >= max_episode_length - 1, torch.ones_like(resets), resets)
 
     if max_consecutive_successes > 0:
         reward = torch.where(
@@ -266,7 +260,8 @@ def compute_push_reward(
     finished_cons_successes = torch.sum(successes * resets.float())
     cons_successes = torch.where(
         num_resets > 0,
-        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes,
+        av_factor * finished_cons_successes / num_resets
+        + (1.0 - av_factor) * consecutive_successes,
         consecutive_successes,
     )
 

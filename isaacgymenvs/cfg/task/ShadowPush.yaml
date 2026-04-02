@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 600
+  episodeLength: 200
   enableDebugVis: False
   aggregateMode: 1
 
@@ -41,7 +41,7 @@ env:
   rotRewardScale: 0.0          # disabled — no full rotation reward
   rotEps: 0.1                  # kept for base class compatibility
   actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
+  reachGoalBonus: 300
   fallDistance: 0.24
   fallPenalty: 0.0
 
@@ -58,21 +58,24 @@ env:
   # Push-specific: success conditions
   successTolerance: 0.1        # kept for base class compatibility
   posSuccessTolerance: 0.02    # 2 cm position tolerance
-  yawSuccessTolerance: 0.1     # ~6° yaw tolerance
+  yawSuccessTolerance: 1.6    # big yaw tolerance
 
   # Push-specific: goal sampling (within palm workspace)
-  targetPosRangeXY: 0.06       # ±6 cm in x/y
-  targetPosRangeZ: 0.04        # ±4 cm in z
+  targetPosRangeXY: 0.02       # ±5 cm in x/y
+  targetPosRangeZ: 0.03        # ±4 cm in z
 
   # Push-specific: anti-flip
   uprightPenaltyScale: -0.5    # penalize roll² + pitch²
   flipAngle: 1.5708            # ~90°, terminate if exceeded
 
+  # Trajectory mode: goals advance along a fixed per-episode direction
+  pushStepSize: 0.01          # metres per goal advancement along push direction
+
   objectType: "block"          # block only (cube is stable for repositioning)
   objectTypePool: []
   objectScaleRanges:
     block: [1, 1]
-    default: [0.8, 1.2]
+    default: [0.9, 1.1]
   observationType: "full_state"
   asymmetric_observations: False
   printNumSuccesses: False

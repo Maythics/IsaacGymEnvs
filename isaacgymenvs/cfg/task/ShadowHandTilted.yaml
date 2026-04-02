@@ -51,6 +51,12 @@ env:
   objAngvelPenaltyScale: -0.02
   dofVelPenaltyScale: -0.01
   palmDistPenaltyScale: -1.0
+  # Overspeed thresholds — penalty is zero below limit, grows exp above it
+  # formula: -scale * max(0, exp(|speed| - limit) - 1)
+  # linvel/angvel limits apply to relative speed (object - palm)
+  objLinvelLimit: 0.2       # m/s   — relative linear speed (object - palm)
+  objAngvelLimit: 1.0       # rad/s — relative angular speed (object - palm)
+  dofVelLimit: 2.0          # rad/s — per-joint angular speed threshold
 
   # Survive reward: bonus for holding the object past surviveStartFrame steps
   surviveRewardScale: 0.01

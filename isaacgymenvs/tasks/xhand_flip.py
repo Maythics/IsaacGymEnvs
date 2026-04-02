@@ -30,34 +30,35 @@ import math
 import torch
 
 from isaacgym import gymtorch
-from isaacgymenvs.tasks.shadow_hand import ShadowHand
+from isaacgymenvs.tasks.xhand_hand import XHandHand
 from isaacgymenvs.utils.torch_jit_utils import (
     quat_from_angle_axis, quat_mul, quat_conjugate, torch_rand_float,
 )
 
 
-class ShadowFlip(ShadowHand):
-    """In-hand flip task: flip a block to one of 4 target orientations, then hold
-    it there for settle_frames consecutive frames without dropping it.
+class XHandFlip(XHandHand):
+    """In-hand flip task for the XHand robot: flip an object to one of 4 target
+    orientations (±π/2 around X or Y axis), then hold it there for settle_frames
+    consecutive frames without dropping it.
 
     Episode flow:
-      Pre-flip  → orientation reward drives the block toward the target 90° rotation.
+      Pre-flip  → orientation reward drives the object toward the target 90° rotation.
       Settling  → once flip detected (rot_dist < flip_tolerance), settle_buf counts up.
-                  A stable_bonus_per_frame is awarded each frame the block stays near
+                  A stable_bonus_per_frame is awarded each frame the object stays near
                   target and in-hand.
       Success   → settle_buf >= settle_frames while not fallen → reach_goal_bonus + reset.
       Failure   → object falls out of hand (palm dist >= fall_dist) or timeout.
 
-    Observation space: 211 dims (identical layout to ShadowHand full_state) for
-    checkpoint / architecture compatibility.
-    Action space: 20 dims (same as ShadowHand).
+    Observation space: 175 dims (identical to XHandHand full_state) — checkpoint
+    compatible with XHandHand and XHandPush.
+    Action space: 14 dims (same as XHandHand/XHandPush).
     """
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless,
                  virtual_screen_capture, force_render):
         # Read flip-specific config before calling super
         self.settle_frames = cfg["env"].get("settleFrames", 30)
-        self.flip_tolerance = cfg["env"].get("flipTolerance", 0.4)       # ~23 deg
+        self.flip_tolerance = cfg["env"].get("flipTolerance", 0.4)        # ~23 deg
         self.stable_bonus_per_frame = cfg["env"].get("stableBonusPerFrame", 0.5)
         self.orient_reward_scale = cfg["env"].get("orientRewardScale", 1.0)
         self.orient_eps = cfg["env"].get("orientEps", 0.1)
@@ -72,7 +73,7 @@ class ShadowFlip(ShadowHand):
         # penalty proportional to total angular displacement accumulated this episode
         self.excess_rotation_penalty_scale = cfg["env"].get("excessRotationPenaltyScale", -0.005)
 
-        # Force full_state obs — guarantees 211-dim observation vector
+        # Force full_state obs — guarantees 175-dim observation vector (checkpoint compat)
         cfg["env"]["observationType"] = "full_state"
 
         super().__init__(cfg, rl_device, sim_device, graphics_device_id, headless,
@@ -145,7 +146,7 @@ class ShadowFlip(ShadowHand):
         self.flip_detected[env_ids] = 0
         self.total_rotation_buf[env_ids] = 0.0
 
-        # Override the object rotation set by parent: upright with small random yaw
+        # Override the object rotation set by parent: upright with random yaw
         # so the agent must learn to flip from varied initial orientations.
         n = len(env_ids)
         rand_yaw = torch_rand_float(-math.pi, math.pi, (n, 1), device=self.device)
@@ -185,7 +186,7 @@ class ShadowFlip(ShadowHand):
                 self.flip_tolerance,
                 self.max_consecutive_successes, self.av_factor,
                 self.rigid_body_states[:, self.palm_body_idx, 0:3],
-                self.object_linvel, self.object_angvel, self.shadow_hand_dof_vel,
+                self.object_linvel, self.object_angvel, self.xhand_dof_vel,
                 self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
                 self.dof_vel_penalty_scale,
                 self.fingertip_pos, self.fingertip_reward_scale, self.fingertip_eps,
@@ -304,8 +305,6 @@ def compute_flip_reward(
     successes = successes + success.float()
 
     # --- Resets ---
-    # Success immediately ends the episode so the trainer bootstraps from the high
-    # reach_goal_bonus rather than discarding unused frames at max_episode_length.
     resets = torch.where(fallen, torch.ones_like(reset_buf), reset_buf)
     resets = torch.where(success, torch.ones_like(resets), resets)
     resets = torch.where(
