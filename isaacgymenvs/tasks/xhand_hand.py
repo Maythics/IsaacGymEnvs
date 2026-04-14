@@ -324,6 +324,10 @@ class XHandHand(VecTask):
         self.num_xhand_shapes = self.gym.get_asset_rigid_shape_count(xhand_asset)
         self.num_xhand_dofs = self.gym.get_asset_dof_count(xhand_asset)
 
+        # DEBUG: print actual DOF names in IsaacGym's internal order
+        _dof_names = self.gym.get_asset_dof_names(xhand_asset)
+        print(f"[XHandHand] DOF names ({len(_dof_names)}): {_dof_names}")
+
         # Set PD drive gains for all DOFs
         xhand_dof_props = self.gym.get_asset_dof_properties(xhand_asset)
         for i in range(self.num_xhand_dofs):
@@ -380,18 +384,29 @@ class XHandHand(VecTask):
         # Poses
         xhand_start_pose = gymapi.Transform()
         xhand_start_pose.p = gymapi.Vec3(*get_axis_params(0.5, self.up_axis_idx))
-        # Ry(-90°): rotates local +X → world +Z so the XHand palm faces upward.
-        # In the URDF local frame the palm normal is +X and fingers extend in +Z;
-        # after this rotation the palm faces +Z (up) and fingers point in world -X.
-        xhand_start_pose.r = gymapi.Quat(0.0, -0.7071068, 0.0, 0.7071068)
+        # Align with ShadowHand: palm faces world -Z (down), fingers point world -Y.
+        # URDF local frame: palm normal = +X, fingers extend in +Z.
+        # Required: +X → -Z (world), +Z → -Y (world).
+        # Quaternion (scalar-first): [qw=0.5, qx=0.5, qy=0.5, qz=-0.5]
+        # IsaacGym scalar-last format: Quat(x, y, z, w) = Quat(0.5, 0.5, -0.5, 0.5)
+        # Palm faces world +Z (up), fingers point world -Y.
+        # URDF local frame: palm normal = +X, fingers extend in +Z.
+        # Required: +X → +Z (world), +Z → -Y (world).
+        # Quaternion (scalar-first): [qw=0.5, qx=0.5, qy=-0.5, qz=0.5]
+        # IsaacGym scalar-last format: Quat(x, y, z, w) = Quat(0.5, -0.5, 0.5, 0.5)
+        xhand_start_pose.r = gymapi.Quat(0.5, -0.5, 0.5, 0.5)
+        # Translate hand base so object spawns at same world position as ShadowHand:
+        # ShadowHand: hand.y=0, dy=-0.39 → object world-y=-0.39
+        # XHand:      hand.y=-0.29, dy=-0.10 → object world-y=-0.39 ✓
+        xhand_start_pose.p.y = -0.29
 
         object_start_pose = gymapi.Transform()
         object_start_pose.p = gymapi.Vec3()
-        # After Ry(-90°) the finger cup lies in the -X direction from the root.
-        # Shift the object into the cup (dx=-0.10) and above the palm (dz=+0.10).
-        pose_dx, pose_dz = -0.10, 0.10
-        object_start_pose.p.x = xhand_start_pose.p.x + pose_dx
-        object_start_pose.p.y = xhand_start_pose.p.y
+        # Fingers point in world -Y; shift object into the cup (dy=-0.10) and
+        # above the palm (dz=+0.10).
+        pose_dy, pose_dz = -0.10, 0.10
+        object_start_pose.p.x = xhand_start_pose.p.x
+        object_start_pose.p.y = xhand_start_pose.p.y + pose_dy
         object_start_pose.p.z = xhand_start_pose.p.z + pose_dz
 
         if self.object_type_pool == ["pen"]:
