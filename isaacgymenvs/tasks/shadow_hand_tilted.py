@@ -73,7 +73,7 @@ class ShadowHandTilted(ShadowHand):
 
     def _randomize_base_rotation(self, env_ids):
         n = len(env_ids)
-        axes = torch.randn((n, 3), device=self.device)
+        axes = torch.tensor([[0,1.0,0]],device=self.device)#torch.randn((n, 3), device=self.device)
         axes = axes / (axes.norm(dim=-1, keepdim=True) + 1e-8)
         self.hand_rot_axis[env_ids] = axes
         self.hand_rot_speed[env_ids] = torch_rand_float(

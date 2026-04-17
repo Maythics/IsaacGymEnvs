@@ -50,6 +50,8 @@ from .shadow_flip import ShadowFlip
 from .xhand_hand import XHandHand
 from .xhand_push import XHandPush
 from .xhand_flip import XHandFlip
+from .shadow_door import ShadowDoor
+from .xhand_door import XHandDoor
 from .allegro_hand import AllegroHand
 from .dextreme.allegro_hand_dextreme import AllegroHandDextremeManualDR, AllegroHandDextremeADR
 from .trifinger import Trifinger
@@ -124,5 +126,7 @@ isaacgym_task_map = {
     "XHandHand": XHandHand,
     "XHandPush": XHandPush,
     "XHandFlip": XHandFlip,
+    "ShadowDoor": ShadowDoor,
+    "XHandDoor": XHandDoor,
     "Trifinger": Trifinger,
 }

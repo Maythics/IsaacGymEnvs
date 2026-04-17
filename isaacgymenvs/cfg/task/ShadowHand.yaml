@@ -32,7 +32,7 @@ env:
   resetDofVelRandomInterval: 0.0
 
   # Random forces applied to the object
-  forceScale: 3
+  forceScale: 0
   forceProbRange: [0.01, 0.1]
   forceDecay: 0.99
   forceDecayInterval: 0.08
