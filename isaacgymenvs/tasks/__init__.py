@@ -120,6 +120,7 @@ isaacgym_task_map = {
     "Quadcopter": Quadcopter,
     "ShadowHand": ShadowHand,
     "ShadowHandTilted": ShadowHandTilted,
+    "ShadowHandTiltedSE3": ShadowHandTilted,
     "ShadowStableGrasp": ShadowStableGrasp,
     "ShadowPush": ShadowPush,
     "ShadowFlip": ShadowFlip,

@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 1800
+  episodeLength: 500
   enableDebugVis: False
   aggregateMode: 1
 
@@ -75,13 +75,13 @@ env:
     default: [0.8, 1.2]      # applied to all ycb_* types
   observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
-  successTolerance: 0.2
+  successTolerance: 0.4
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
   # Base rotation parameters (rad/s)
-  baseAngVelMin: -0.30
-  baseAngVelMax: 0.30
+  baseAngVelMin: -0.2
+  baseAngVelMax: 0.2
 
   asset:
     assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"

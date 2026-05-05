@@ -1,0 +1,13 @@
+# SE(3)-equivariant variant of ShadowHandTilted.
+# Identical physics/reward/randomization as ShadowHandTilted; the only difference
+# is that the observation appends hand_root_pos(3) + hand_root_quat(4) (so 218 total).
+# Train with ShadowHandTiltedSE3PPO which selects the hand-frame preprocess model.
+
+defaults:
+  - ShadowHandTilted
+  - _self_
+
+name: ShadowHandTiltedSE3
+
+env:
+  appendHandBasePose: True

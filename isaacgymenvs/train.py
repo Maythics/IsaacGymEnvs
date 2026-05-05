@@ -97,6 +97,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     from isaacgymenvs.learning import amp_players
     from isaacgymenvs.learning import amp_models
     from isaacgymenvs.learning import amp_network_builder
+    from isaacgymenvs.learning import se3_network_builder
     import isaacgymenvs
 
 
@@ -189,6 +190,10 @@ def launch_rlg_hydra(cfg: DictConfig):
         runner.player_factory.register_builder('amp_continuous', lambda **kwargs : amp_players.AMPPlayerContinuous(**kwargs))
         model_builder.register_model('continuous_amp', lambda network, **kwargs : amp_models.ModelAMPContinuous(network))
         model_builder.register_network('amp', lambda **kwargs : amp_network_builder.AMPBuilder())
+
+        # SE(3)-equivariant wrapper: hand-frame preprocess in front of the standard actor_critic MLP.
+        model_builder.register_model('continuous_a2c_logstd_se3', lambda network, **kwargs : se3_network_builder.SE3ModelA2CContinuousLogStd(network))
+        model_builder.register_network('se3_actor_critic', lambda **kwargs : se3_network_builder.SE3Builder())
 
         return runner
 

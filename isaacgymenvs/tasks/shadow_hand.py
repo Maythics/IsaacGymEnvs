@@ -137,6 +137,11 @@ class ShadowHand(VecTask):
             "full_state": 211
         }
 
+        # When True, append hand root pose (pos 3 + quat 4) to the end of the observation.
+        # Consumed by the SE(3)-preprocess policy to re-express world-frame obs in hand frame.
+        # Only implemented for full_state; leaves asymmetric states buffer unchanged.
+        self.append_hand_base_pose = bool(self.cfg["env"].get("appendHandBasePose", False))
+
         self.up_axis = 'z'
 
         self.fingertips = ["robot0:ffdistal", "robot0:mfdistal", "robot0:rfdistal", "robot0:lfdistal", "robot0:thdistal"]
@@ -150,7 +155,13 @@ class ShadowHand(VecTask):
         if self.asymmetric_obs:
             num_states = 211
 
-        self.cfg["env"]["numObservations"] = self.num_obs_dict[self.obs_type]
+        num_obs = self.num_obs_dict[self.obs_type]
+        if self.append_hand_base_pose:
+            if self.obs_type != "full_state":
+                raise Exception("appendHandBasePose is only supported with observationType=full_state")
+            num_obs += 7
+
+        self.cfg["env"]["numObservations"] = num_obs
         self.cfg["env"]["numStates"] = num_states
         self.cfg["env"]["numActions"] = 20
 
@@ -646,6 +657,11 @@ class ShadowHand(VecTask):
             # obs_total = obs_end + num_actions = 211
             obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
             self.obs_buf[:, obs_end:obs_end + self.num_actions] = self.actions
+
+            if self.append_hand_base_pose:
+                # hand root pose (pos 3 + quat 4) in world frame, used by SE(3)-preprocess policy
+                pose_start = obs_end + self.num_actions  # 211
+                self.obs_buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
 
     def reset_target_pose(self, env_ids, apply_reset=False):
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), 4), device=self.device)

@@ -39,16 +39,16 @@ env:
 
   # reward -> dictionary
   distRewardScale: -10.0
-  rotRewardScale: 1.0
+  rotRewardScale: 2.0
   rotEps: 0.1
   actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
+  reachGoalBonus: 400
   fallDistance: 0.24
   fallPenalty: 0.0
 
   # Quasi-static manipulation penalties (negative = penalty)
-  objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.05
+  objLinvelPenaltyScale: 0 #-0.01
+  objAngvelPenaltyScale: 0 # -0.05
   dofVelPenaltyScale: -0.001
   palmDistPenaltyScale: -0.5
   # Overspeed thresholds — penalty is zero below limit, grows exp above it
