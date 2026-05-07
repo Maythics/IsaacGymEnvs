@@ -1,0 +1,195 @@
+name: XHandPour
+
+physics_engine: ${..physics_engine}
+
+env:
+  numEnvs: ${resolve_default:8192,${...num_envs}}
+  envSpacing: 0.75
+  episodeLength: 800
+  enableDebugVis: False
+  aggregateMode: 1
+
+  clipObservations: 5.0
+  clipActions: 1.0
+
+  stiffnessScale: 1.0
+  forceLimitScale: 1.0
+
+  useRelativeControl: False
+  dofSpeedScale: 20.0
+  actionsMovingAverage: 1.0
+  actionSpeedScale: 1.0
+  controlFrequencyInv: 1
+
+  startPositionNoise: 0.01
+  startRotationNoise: 0.0
+
+  resetPositionNoise: 0.01
+  resetRotationNoise: 0.0
+  resetDofPosRandomInterval: 0.2
+  resetDofVelRandomInterval: 0.0
+
+  forceScale: 0
+  forceProbRange: [0.01, 0.1]
+  forceDecay: 0.99
+  forceDecayInterval: 0.08
+
+  distRewardScale: -10.0
+  rotRewardScale: 1.0
+  rotEps: 0.1
+  actionPenaltyScale: -0.0002
+  reachGoalBonus: 0
+  fallDistance: 0.35
+  fallPenalty: -50.0
+
+  objLinvelPenaltyScale: -0.005
+  objAngvelPenaltyScale: -0.02
+  dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: 0.0
+  objLinvelLimit: 0.6
+  objAngvelLimit: 10.0
+  dofVelLimit: 3.0
+
+  objectType: "bottle"
+  objectTypePool: ["bottle"]
+  objectScaleRanges:
+    bottle: [0.95, 1.05]
+    default: [1.0, 1.0]
+  observationType: "full_state"
+  asymmetric_observations: False
+  successTolerance: 0.20
+  printNumSuccesses: False
+  maxConsecutiveSuccesses: 0
+
+  asset:
+    assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
+    assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
+    assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
+    assetFileNameBottle: "urdf/bottle/bottle_rigid.urdf"
+
+  enableCameraSensors: False
+
+  # ---- Pour task parameters (mirror ShadowPour) ----
+  rollAngleMin: 1.396
+  rollAngleMax: 1.745
+  # XHand default: fingers point world -Y, palm faces +Z.
+  # Roll = rotation about the along-fingers axis = world Y.
+  rollAxis: [0.0, 1.0, 0.0]
+
+  numSubGoals: 5
+  pourFinalPitchDeg: 90.0
+  pourPitchAxis: [0.0, 1.0, 0.0]
+
+  # Bottle spawn (palm-anchored, palm-local biases). Tune empirically.
+  bottleSpawnPosNoise: 0.02
+  bottleSpawnXBias: 0.03
+  bottleSpawnYBias: -0.08
+  bottleSpawnZOffset: 0.10
+  bottleSpawnRotNoise: 0.20
+
+  # Auto-translate XHand so its palm lands at this world position. ShadowPour
+  # prints its palm world position at startup; paste that value here to align
+  # palms exactly across the two tasks. Takes precedence over handBasePosOverride.
+  palmWorldTarget: [0.0, -0.29, 0.49]
+  # Fallback: explicit base-position override (used only if palmWorldTarget is null).
+  handBasePosOverride: null
+
+  graspProximityScale: -5.0
+  graspContactScale: -2.0
+  graspBonus: 50.0
+  graspProximityThreshold: 0.10
+  graspLinvelThreshold: 0.20
+  graspAngvelThreshold: 1.50
+
+  subgoalRotScale: 2.0
+  subgoalPosScale: -1.0
+  subgoalAdvanceBonus: 100.0
+  subgoalSuccessTolerance: 0.20
+  subgoalHoldFrames: 10
+  finalSuccessBonus: 400.0
+
+task:
+  randomize: False
+  randomization_params:
+    frequency: 720
+    observations:
+      range: [0, .002]
+      range_correlated: [0, .001]
+      operation: "additive"
+      distribution: "gaussian"
+    actions:
+      range: [0., .05]
+      range_correlated: [0, .015]
+      operation: "additive"
+      distribution: "gaussian"
+    sim_params:
+      gravity:
+        range: [0, 0.4]
+        operation: "additive"
+        distribution: "gaussian"
+    actor_params:
+      hand:
+        color: True
+        dof_properties:
+          damping:
+            range: [0.3, 3.0]
+            operation: "scaling"
+            distribution: "loguniform"
+          stiffness:
+            range: [0.75, 1.5]
+            operation: "scaling"
+            distribution: "loguniform"
+          lower:
+            range: [0, 0.01]
+            operation: "additive"
+            distribution: "gaussian"
+          upper:
+            range: [0, 0.01]
+            operation: "additive"
+            distribution: "gaussian"
+        rigid_body_properties:
+          mass:
+            range: [0.5, 1.5]
+            operation: "scaling"
+            distribution: "uniform"
+            setup_only: True
+        rigid_shape_properties:
+          friction:
+            num_buckets: 250
+            range: [0.7, 1.3]
+            operation: "scaling"
+            distribution: "uniform"
+      object:
+        rigid_body_properties:
+          mass:
+            range: [0.5, 1.5]
+            operation: "scaling"
+            distribution: "uniform"
+            setup_only: True
+        rigid_shape_properties:
+          friction:
+            num_buckets: 250
+            range: [0.7, 1.3]
+            operation: "scaling"
+            distribution: "uniform"
+
+sim:
+  dt: 0.01667
+  substeps: 2
+  up_axis: "z"
+  use_gpu_pipeline: ${eq:${...pipeline},"gpu"}
+  gravity: [0.0, 0.0, -9.81]
+  physx:
+    num_threads: ${....num_threads}
+    solver_type: ${....solver_type}
+    use_gpu: ${contains:"cuda",${....sim_device}}
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    max_gpu_contact_pairs: 8388608
+    num_subscenes: ${....num_subscenes}
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+    contact_collection: 0

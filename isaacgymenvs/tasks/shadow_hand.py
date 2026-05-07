@@ -99,8 +99,8 @@ class ShadowHand(VecTask):
         self.object_type_pool = object_type_pool
 
         for t in self.object_type_pool:
-            if t not in {"block", "egg", "pen"} and not t.startswith("ycb_"):
-                raise ValueError(f"Unknown objectType '{t}'. Must be block/egg/pen or ycb_*.")
+            if t not in {"block", "egg", "pen", "bottle"} and not t.startswith("ycb_"):
+                raise ValueError(f"Unknown objectType '{t}'. Must be block/egg/pen/bottle or ycb_*.")
 
         self.object_scale_ranges = self.cfg["env"].get("objectScaleRanges", {})
 
@@ -108,6 +108,7 @@ class ShadowHand(VecTask):
             "block": "urdf/objects/cube_multicolor.urdf",
             "egg": "mjcf/open_ai_assets/hand/egg.xml",
             "pen": "mjcf/open_ai_assets/hand/pen.xml",
+            "bottle": "urdf/bottle/bottle_rigid.urdf",
         }
         for t in self.object_type_pool:
             if t.startswith("ycb_") and t not in self.asset_files_dict:
@@ -117,6 +118,7 @@ class ShadowHand(VecTask):
             self.asset_files_dict["block"] = self.cfg["env"]["asset"].get("assetFileNameBlock", self.asset_files_dict["block"])
             self.asset_files_dict["egg"] = self.cfg["env"]["asset"].get("assetFileNameEgg", self.asset_files_dict["egg"])
             self.asset_files_dict["pen"] = self.cfg["env"]["asset"].get("assetFileNamePen", self.asset_files_dict["pen"])
+            self.asset_files_dict["bottle"] = self.cfg["env"]["asset"].get("assetFileNameBottle", self.asset_files_dict["bottle"])
 
         # ignore_z: True only when entire pool is pen (preserve single-type pen behavior)
         self.ignore_z = (self.object_type_pool == ["pen"])
