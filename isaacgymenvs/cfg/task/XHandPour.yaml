@@ -78,13 +78,13 @@ env:
 
   numSubGoals: 5
   pourFinalPitchDeg: 90.0
-  pourPitchAxis: [0.0, 1.0, 0.0]
+  pourPitchAxis: [1.0, 0.0, 0.0]
 
   # Bottle spawn (palm-anchored, palm-local biases). Tune empirically.
-  bottleSpawnPosNoise: 0.02
+  bottleSpawnPosNoise: 0.01
   bottleSpawnXBias: 0.03
-  bottleSpawnYBias: -0.08
-  bottleSpawnZOffset: 0.10
+  bottleSpawnYBias: -0.1
+  bottleSpawnZOffset: 0.06
   bottleSpawnRotNoise: 0.20
 
   # Auto-translate XHand so its palm lands at this world position. ShadowPour

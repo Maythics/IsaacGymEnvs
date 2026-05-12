@@ -6,7 +6,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:8192,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 800
+  episodeLength: 400
   enableDebugVis: False
   aggregateMode: 1
 
@@ -86,31 +86,31 @@ env:
   # Sub-goal trajectory
   numSubGoals: 5
   pourFinalPitchDeg: 90.0
-  pourPitchAxis: [0.0, 1.0, 0.0]   # world Y
+  pourPitchAxis: [1.0, 0.0, 0.0]   # world X
 
   # Bottle spawn (palm-anchored). World-frame biases shift the bottle from
   # the palm into the grasp zone; tune empirically.
-  bottleSpawnPosNoise: 0.02
+  bottleSpawnPosNoise: 0.01
   bottleSpawnXBias: 0.03
-  bottleSpawnYBias: -0.08
-  bottleSpawnZOffset: 0.10
+  bottleSpawnYBias: -0.1
+  bottleSpawnZOffset: 0.06
   bottleSpawnRotNoise: 0.20
 
   # Phase 0: grasp shaping (negative scales → larger reward when distance shrinks)
   graspProximityScale: -5.0
   graspContactScale: -2.0
   graspBonus: 50.0
-  graspProximityThreshold: 0.10
+  graspProximityThreshold: 0.30
   graspLinvelThreshold: 0.20
   graspAngvelThreshold: 1.50
 
   # Phase 1+: sub-goal pursuit
   subgoalRotScale: 2.0
   subgoalPosScale: -1.0
-  subgoalAdvanceBonus: 100.0
-  subgoalSuccessTolerance: 0.20
+  subgoalAdvanceBonus: 200.0
+  subgoalSuccessTolerance: 0.4
   subgoalHoldFrames: 10
-  finalSuccessBonus: 400.0
+  finalSuccessBonus: 800.0
 
 task:
   randomize: False

@@ -36,7 +36,7 @@ class XHandPour(XHandHand):
 
         self.num_subgoals = int(cfg["env"].get("numSubGoals", 5))
         self.pour_final_pitch = math.radians(float(cfg["env"].get("pourFinalPitchDeg", 90.0)))
-        self._pour_pitch_axis_cfg = cfg["env"].get("pourPitchAxis", [0.0, 1.0, 0.0])
+        self._pour_pitch_axis_cfg = cfg["env"].get("pourPitchAxis", [1.0, 0.0, 0.0])
 
         self.bottle_spawn_pos_noise = float(cfg["env"].get("bottleSpawnPosNoise", 0.03))
         # World-frame biases on top of the palm anchor (match ShadowPour defaults)
@@ -192,6 +192,31 @@ class XHandPour(XHandHand):
     # Overrides
     # ------------------------------------------------------------------
 
+    def reset_target_pose(self, env_ids, apply_reset=False):
+        # Until subgoal_quats is built (parent __init__ calls reset_idx →
+        # reset_target_pose before our subclass init has populated it), defer
+        # to the parent's randomized behavior.
+        if not hasattr(self, "subgoal_quats"):
+            return super().reset_target_pose(env_ids, apply_reset=apply_reset)
+
+        self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
+        self.goal_states[env_ids, 3:7] = self.subgoal_quats[env_ids, 0]
+        self.root_state_tensor[self.goal_object_indices[env_ids], 0:3] = (
+            self.goal_states[env_ids, 0:3] + self.goal_displacement_tensor)
+        self.root_state_tensor[self.goal_object_indices[env_ids], 3:7] = \
+            self.goal_states[env_ids, 3:7]
+        self.root_state_tensor[self.goal_object_indices[env_ids], 7:13] = 0.0
+
+        if apply_reset:
+            goal_idx = self.goal_object_indices[env_ids].to(torch.int32)
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self.root_state_tensor),
+                gymtorch.unwrap_tensor(goal_idx),
+                len(env_ids),
+            )
+        self.reset_goal_buf[env_ids] = 0
+
     def reset_idx(self, env_ids, goal_env_ids):
         super().reset_idx(env_ids, goal_env_ids)
         self._apply_hand_roll(env_ids)
@@ -200,9 +225,20 @@ class XHandPour(XHandHand):
         self.is_grasped[env_ids] = False
         self.subgoal_hold_buf[env_ids] = 0
         self.successes[env_ids] = 0
+        # Re-write the floating goal pose at sub-goal 0 (upright). The parent
+        # already pushed this once via its own indexed call, but re-pushing
+        # alongside hand+object guarantees the goal visual is restored to
+        # upright at episode start even if a later push shadows the earlier
+        # one in the sim's indexed-update buffer.
+        self.root_state_tensor[self.goal_object_indices[env_ids], 0:3] = (
+            self.goal_init_state[env_ids, 0:3] + self.goal_displacement_tensor)
+        self.root_state_tensor[self.goal_object_indices[env_ids], 3:7] = \
+            self.subgoal_quats[env_ids, 0]
+        self.root_state_tensor[self.goal_object_indices[env_ids], 7:13] = 0.0
         indices = torch.cat([
             self.hand_indices[env_ids],
             self.object_indices[env_ids],
+            self.goal_object_indices[env_ids],
         ]).to(torch.int32)
         self._push_root_state(indices)
 
@@ -261,6 +297,22 @@ class XHandPour(XHandHand):
 
         self.rew_buf[:] = rew
         self.reset_buf[:] = resets
+
+        # Sync the floating goal-object visual to the new sub-goal whenever a
+        # phase advances, so the operator sees the next target orientation.
+        phase_changed = (new_phase != self.phase).nonzero(as_tuple=False).squeeze(-1)
+        if phase_changed.numel() > 0:
+            new_quat = self.subgoal_quats[phase_changed, new_phase[phase_changed]]
+            goal_idx = self.goal_object_indices[phase_changed]
+            self.root_state_tensor[goal_idx, 3:7] = new_quat
+            self.root_state_tensor[goal_idx, 7:13] = 0.0
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self.root_state_tensor),
+                gymtorch.unwrap_tensor(goal_idx.to(torch.int32)),
+                phase_changed.numel(),
+            )
+
         self.phase[:] = new_phase
         self.is_grasped[:] = new_is_grasped
         self.subgoal_hold_buf[:] = new_hold

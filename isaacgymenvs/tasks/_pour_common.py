@@ -8,6 +8,7 @@ import math
 import torch
 
 from isaacgymenvs.utils.torch_jit_utils import (
+    quat_apply,
     quat_conjugate,
     quat_from_angle_axis,
     quat_mul,
@@ -76,9 +77,18 @@ def compute_pour_reward(
 
     env_arange = torch.arange(num_envs, device=phase.device)
     cur_subgoal_quat = subgoal_quats_per_env[env_arange, phase]
-    quat_diff = quat_mul(object_rot, quat_conjugate(cur_subgoal_quat))
-    rot_dist = 2.0 * torch.asin(
-        torch.clamp(torch.norm(quat_diff[:, 0:3], p=2, dim=-1), max=1.0))
+    # Yaw-invariant distance: angle between the bottle's main (local Z) axis
+    # and the target's main axis in world frame. The bottle URDF has its long
+    # axis along local Z (izz < ixx,iyy in the inertia tensor), so spinning
+    # about that axis (yaw around the long axis) does not change the metric.
+    local_z = torch.zeros_like(object_pos)
+    local_z[:, 2] = 1.0
+    bottle_axis_world = quat_apply(object_rot, local_z)
+    target_axis_world = quat_apply(cur_subgoal_quat, local_z)
+    cross = torch.cross(bottle_axis_world, target_axis_world, dim=-1)
+    sin_mag = torch.norm(cross, p=2, dim=-1)
+    cos_val = (bottle_axis_world * target_axis_world).sum(dim=-1)
+    rot_dist = torch.atan2(sin_mag, cos_val)
 
     near_palm = palm_to_obj < grasp_proximity_threshold
     obj_low_speed = (obj_linspeed < grasp_linvel_threshold) & (obj_angspeed < grasp_angvel_threshold)
