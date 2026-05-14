@@ -26,23 +26,23 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""XHandHand: in-hand reorientation task for the XHand robot.
+"""WujiHand: in-hand reorientation task for the Wuji robot.
 
-Mirrors ShadowHand but uses the XHand URDF (12 finger DOFs + 2 wrist DOFs = 14
-total) and full_state observations (175 dims).
+Mirrors ShadowHand but uses the Wuji URDF (20 finger DOFs + 2 wrist DOFs = 22
+total) and full_state observations (207 dims).
 
-Observation layout (full_state, 175 dims):
-  [0:14]    DOF positions (unscaled to [-1, 1])
-  [14:28]   DOF velocities × 0.2
-  [28:42]   DOF forces × 10.0
-  [42:49]   Object pose (pos + quat)
-  [49:52]   Object linear velocity
-  [52:55]   Object angular velocity × 0.2
-  [55:62]   Goal pose (pos + quat)
-  [62:66]   quat_mul(obj_rot, conj(goal_rot))
-  [66:131]  5 fingertips × 13 = 65
-  [131:161] 5 force-torque sensors × 6 = 30
-  [161:175] Last 14 actions
+Observation layout (full_state, 207 dims):
+  [0:22]    DOF positions (unscaled to [-1, 1])
+  [22:44]   DOF velocities × 0.2
+  [44:66]   DOF forces × 10.0
+  [66:73]   Object pose (pos + quat)
+  [73:76]   Object linear velocity
+  [76:79]   Object angular velocity × 0.2
+  [79:86]   Goal pose (pos + quat)
+  [86:90]   quat_mul(obj_rot, conj(goal_rot))
+  [90:155]  5 fingertips × 13 = 65
+  [155:185] 5 force-torque sensors × 6 = 30
+  [185:207] Last 22 actions
 """
 
 import numpy as np
@@ -59,26 +59,27 @@ from isaacgymenvs.utils.torch_jit_utils import (
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
 
-# Number of DOFs in the XHand with wrist: 2 wrist + 12 fingers
-_XHAND_NUM_DOFS = 14
+# Number of DOFs in the Wuji with wrist: 2 wrist + 20 fingers
+_WUJI_NUM_DOFS = 22
 # Number of actions = all DOFs (no tendon coupling)
-_XHAND_NUM_ACTIONS = 14
+_WUJI_NUM_ACTIONS = 22
 
 # Fingertip rigid-body names after collapse_fixed_joints=True.
-# The fixed "tip" links are merged into the last revolute-joint child bodies.
-_XHAND_FINGERTIPS = [
-    "right_hand_index_rota_link2",
-    "right_hand_mid_link2",
-    "right_hand_ring_link2",
-    "right_hand_pinky_link2",
-    "right_hand_thumb_rota_link2",
+# The fixed tip link is merged into the last revolute-joint child body (link4).
+# finger1 is the thumb (placed last to match ShadowHand's [ff, mf, rf, lf, th]).
+_WUJI_FINGERTIPS = [
+    "right_finger2_link4",  # ff (index)
+    "right_finger3_link4",  # mf (middle)
+    "right_finger4_link4",  # rf (ring)
+    "right_finger5_link4",  # lf (little)
+    "right_finger1_link4",  # th (thumb)
 ]
 
 # Palm link name (used for fall detection / palm-distance penalty)
-_XHAND_PALM = "right_hand_link"
+_WUJI_PALM = "right_palm_link"
 
 
-class XHandHand(VecTask):
+class WujiHand(VecTask):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id,
                  headless, virtual_screen_capture, force_render):
@@ -122,10 +123,14 @@ class XHandHand(VecTask):
         self.obj_angvel_limit = self.cfg["env"].get("objAngvelLimit", 1.5)
         self.dof_vel_limit = self.cfg["env"].get("dofVelLimit", 2.0)
 
-        self.xhand_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
+        self.wuji_dof_speed_scale = self.cfg["env"]["dofSpeedScale"]
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.action_speed_scale = self.cfg["env"].get("actionSpeedScale", 1.0)
+
+        # wristActionClip: when < 1.0, clamps the first 2 action dims (WRJ2/WRJ1)
+        # to [-c, +c] before they reach the env. Mirrors ShadowHand:790-794.
+        self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -172,19 +177,25 @@ class XHandHand(VecTask):
 
         self.obs_type = self.cfg["env"]["observationType"]
         if self.obs_type != "full_state":
-            raise Exception("XHandHand only supports observationType='full_state'")
+            raise Exception("WujiHand only supports observationType='full_state'")
 
         print("Obs type:", self.obs_type)
 
-        self.num_xhand_dofs = _XHAND_NUM_DOFS
+        self.num_wuji_dofs = _WUJI_NUM_DOFS
 
         # full_state obs: 3*num_dofs + 13 (obj) + 11 (goal+rel_quat) + 5*13 (fingertips) + 5*6 (ft sensors) + num_actions
-        # = 42 + 13 + 11 + 65 + 30 + 14 = 175
-        num_obs = 3 * self.num_xhand_dofs + 13 + 11 + 5 * 13 + 5 * 6 + _XHAND_NUM_ACTIONS
+        # = 66 + 13 + 11 + 65 + 30 + 22 = 207
+        num_obs = 3 * self.num_wuji_dofs + 13 + 11 + 5 * 13 + 5 * 6 + _WUJI_NUM_ACTIONS
+
+        # When True, append hand root pose (pos 3 + quat 4) to the obs.
+        # Used by the SE(3)-preprocess policy. Mirrors ShadowHand:150-169.
+        self.append_hand_base_pose = bool(self.cfg["env"].get("appendHandBasePose", False))
+        if self.append_hand_base_pose:
+            num_obs += 7
 
         self.up_axis = 'z'
 
-        self.fingertips = _XHAND_FINGERTIPS
+        self.fingertips = _WUJI_FINGERTIPS
         self.num_fingertips = len(self.fingertips)
 
         self.use_vel_obs = False
@@ -197,7 +208,7 @@ class XHandHand(VecTask):
 
         self.cfg["env"]["numObservations"] = num_obs
         self.cfg["env"]["numStates"] = num_states
-        self.cfg["env"]["numActions"] = _XHAND_NUM_ACTIONS
+        self.cfg["env"]["numActions"] = _WUJI_NUM_ACTIONS
 
         super().__init__(
             config=self.cfg, rl_device=rl_device, sim_device=sim_device,
@@ -228,19 +239,19 @@ class XHandHand(VecTask):
 
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
         self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(
-            self.num_envs, self.num_xhand_dofs)
+            self.num_envs, self.num_wuji_dofs)
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
 
-        self.xhand_default_dof_pos = torch.zeros(
-            self.num_xhand_dofs, dtype=torch.float, device=self.device)
+        self.wuji_default_dof_pos = torch.zeros(
+            self.num_wuji_dofs, dtype=torch.float, device=self.device)
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.xhand_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_xhand_dofs]
-        self.xhand_dof_pos = self.xhand_dof_state[..., 0]
-        self.xhand_dof_vel = self.xhand_dof_state[..., 1]
+        self.wuji_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_wuji_dofs]
+        self.wuji_dof_pos = self.wuji_dof_state[..., 0]
+        self.wuji_dof_vel = self.wuji_dof_state[..., 1]
 
         self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor).view(
             self.num_envs, -1, 13)
@@ -304,13 +315,13 @@ class XHandHand(VecTask):
         lower = gymapi.Vec3(-spacing, -spacing, 0.0)
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
-        # XHand URDF is self-contained in assets/urdf/xhand/
+        # Wuji URDF is self-contained in assets/urdf/wuji/
         base_asset_root = os.path.normpath(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets'))
-        xhand_asset_root = os.path.join(base_asset_root, "urdf", "xhand")
-        xhand_asset_file = "xhand_right_with_wrist.urdf"
+        wuji_asset_root = os.path.join(base_asset_root, "urdf", "wuji")
+        wuji_asset_file = "wuji_right_with_wrist.urdf"
 
-        # Load XHand asset
+        # Load Wuji asset
         asset_options = gymapi.AssetOptions()
         asset_options.flip_visual_attachments = False
         asset_options.fix_base_link = True
@@ -323,54 +334,59 @@ class XHandHand(VecTask):
         if self.physics_engine == gymapi.SIM_PHYSX:
             asset_options.use_physx_armature = True
 
-        xhand_asset = self.gym.load_asset(
-            self.sim, xhand_asset_root, xhand_asset_file, asset_options)
+        wuji_asset = self.gym.load_asset(
+            self.sim, wuji_asset_root, wuji_asset_file, asset_options)
 
-        self.num_xhand_bodies = self.gym.get_asset_rigid_body_count(xhand_asset)
-        self.num_xhand_shapes = self.gym.get_asset_rigid_shape_count(xhand_asset)
-        self.num_xhand_dofs = self.gym.get_asset_dof_count(xhand_asset)
+        self.num_wuji_bodies = self.gym.get_asset_rigid_body_count(wuji_asset)
+        self.num_wuji_shapes = self.gym.get_asset_rigid_shape_count(wuji_asset)
+        self.num_wuji_dofs = self.gym.get_asset_dof_count(wuji_asset)
 
         # DEBUG: print actual DOF names in IsaacGym's internal order
-        _dof_names = self.gym.get_asset_dof_names(xhand_asset)
-        print(f"[XHandHand] DOF names ({len(_dof_names)}): {_dof_names}")
+        _dof_names = self.gym.get_asset_dof_names(wuji_asset)
+        print(f"[WujiHand] DOF names ({len(_dof_names)}): {_dof_names}")
 
-        # Set PD drive gains for all DOFs
-        xhand_dof_props = self.gym.get_asset_dof_properties(xhand_asset)
-        for i in range(self.num_xhand_dofs):
-            xhand_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
-            xhand_dof_props['stiffness'][i] = 2.0
-            xhand_dof_props['damping'][i] = 0.1
+        # Set PD drive gains for all DOFs. Wrist DOFs (0-1) get higher stiffness
+        # since they bear hand-mass loads in tilted variants.
+        wuji_dof_props = self.gym.get_asset_dof_properties(wuji_asset)
+        for i in range(self.num_wuji_dofs):
+            wuji_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
+            if i < 2:
+                wuji_dof_props['stiffness'][i] = 5.0
+                wuji_dof_props['damping'][i] = 0.2
+            else:
+                wuji_dof_props['stiffness'][i] = 2.0
+                wuji_dof_props['damping'][i] = 0.1
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
-            list(range(self.num_xhand_dofs)), dtype=torch.long, device=self.device)
+            list(range(self.num_wuji_dofs)), dtype=torch.long, device=self.device)
 
-        self.xhand_dof_lower_limits = []
-        self.xhand_dof_upper_limits = []
-        self.xhand_dof_default_pos = []
-        self.xhand_dof_default_vel = []
-        for i in range(self.num_xhand_dofs):
-            self.xhand_dof_lower_limits.append(xhand_dof_props['lower'][i])
-            self.xhand_dof_upper_limits.append(xhand_dof_props['upper'][i])
-            self.xhand_dof_default_pos.append(0.0)
-            self.xhand_dof_default_vel.append(0.0)
+        self.wuji_dof_lower_limits = []
+        self.wuji_dof_upper_limits = []
+        self.wuji_dof_default_pos = []
+        self.wuji_dof_default_vel = []
+        for i in range(self.num_wuji_dofs):
+            self.wuji_dof_lower_limits.append(wuji_dof_props['lower'][i])
+            self.wuji_dof_upper_limits.append(wuji_dof_props['upper'][i])
+            self.wuji_dof_default_pos.append(0.0)
+            self.wuji_dof_default_vel.append(0.0)
 
-        self.xhand_dof_lower_limits = to_torch(self.xhand_dof_lower_limits, device=self.device)
-        self.xhand_dof_upper_limits = to_torch(self.xhand_dof_upper_limits, device=self.device)
-        self.xhand_dof_default_pos = to_torch(self.xhand_dof_default_pos, device=self.device)
-        self.xhand_dof_default_vel = to_torch(self.xhand_dof_default_vel, device=self.device)
+        self.wuji_dof_lower_limits = to_torch(self.wuji_dof_lower_limits, device=self.device)
+        self.wuji_dof_upper_limits = to_torch(self.wuji_dof_upper_limits, device=self.device)
+        self.wuji_dof_default_pos = to_torch(self.wuji_dof_default_pos, device=self.device)
+        self.wuji_dof_default_vel = to_torch(self.wuji_dof_default_vel, device=self.device)
 
         # Fingertip rigid-body indices
         self.fingertip_handles = [
-            self.gym.find_asset_rigid_body_index(xhand_asset, name)
+            self.gym.find_asset_rigid_body_index(wuji_asset, name)
             for name in self.fingertips
         ]
-        self.palm_body_idx = self.gym.find_asset_rigid_body_index(xhand_asset, _XHAND_PALM)
+        self.palm_body_idx = self.gym.find_asset_rigid_body_index(wuji_asset, _WUJI_PALM)
 
         # Create force sensors at each fingertip
         sensor_pose = gymapi.Transform()
         for ft_handle in self.fingertip_handles:
-            self.gym.create_asset_force_sensor(xhand_asset, ft_handle, sensor_pose)
+            self.gym.create_asset_force_sensor(wuji_asset, ft_handle, sensor_pose)
 
         # Load object assets (same paths as ShadowHand)
         import random as _random
@@ -379,6 +395,19 @@ class XHandHand(VecTask):
         max_obj_shapes = 0
         for obj_type in unique_types:
             obj_file = self.asset_files_dict[obj_type]
+            full_path = os.path.join(base_asset_root, obj_file)
+            if not os.path.isfile(full_path):
+                ycb_dir = os.path.join(base_asset_root, "urdf", "ycb_balls")
+                hint = ""
+                if obj_type.startswith("ycb_") and os.path.isdir(ycb_dir):
+                    avail = sorted(
+                        f[:-5] for f in os.listdir(ycb_dir) if f.endswith(".urdf")
+                    )
+                    hint = f" Available ycb_* names: {avail}"
+                raise FileNotFoundError(
+                    f"Object asset for objectType='{obj_type}' not found at "
+                    f"'{full_path}'.{hint}"
+                )
             opt = gymapi.AssetOptions()
             phys = self.gym.load_asset(self.sim, base_asset_root, obj_file, opt)
             opt2 = gymapi.AssetOptions()
@@ -388,8 +417,8 @@ class XHandHand(VecTask):
             max_obj_shapes = max(max_obj_shapes, self.gym.get_asset_rigid_shape_count(phys))
 
         # Poses
-        xhand_start_pose = gymapi.Transform()
-        xhand_start_pose.p = gymapi.Vec3(*get_axis_params(0.5, self.up_axis_idx))
+        wuji_start_pose = gymapi.Transform()
+        wuji_start_pose.p = gymapi.Vec3(*get_axis_params(0.5, self.up_axis_idx))
         # Align with ShadowHand: palm faces world -Z (down), fingers point world -Y.
         # URDF local frame: palm normal = +X, fingers extend in +Z.
         # Required: +X → -Z (world), +Z → -Y (world).
@@ -400,23 +429,23 @@ class XHandHand(VecTask):
         # Required: +X → +Z (world), +Z → -Y (world).
         # Quaternion (scalar-first): [qw=0.5, qx=0.5, qy=-0.5, qz=0.5]
         # IsaacGym scalar-last format: Quat(x, y, z, w) = Quat(0.5, -0.5, 0.5, 0.5)
-        xhand_start_pose.r = gymapi.Quat(0.5, -0.5, 0.5, 0.5)
+        wuji_start_pose.r = gymapi.Quat(0.5, -0.5, 0.5, 0.5)
         # Translate hand base so object spawns at same world position as ShadowHand:
         # ShadowHand: hand.y=0, dy=-0.39 → object world-y=-0.39
-        # XHand:      hand.y=-0.29, dy=-0.10 → object world-y=-0.39 ✓
-        xhand_start_pose.p.y = -0.29
+        # Wuji:      hand.y=-0.29, dy=-0.10 → object world-y=-0.39 ✓
+        wuji_start_pose.p.y = -0.29
 
         object_start_pose = gymapi.Transform()
         object_start_pose.p = gymapi.Vec3()
         # Fingers point in world -Y; shift object into the cup (dy=-0.10) and
         # above the palm (dz=+0.10).
         pose_dy, pose_dz = -0.10, 0.10
-        object_start_pose.p.x = xhand_start_pose.p.x
-        object_start_pose.p.y = xhand_start_pose.p.y + pose_dy
-        object_start_pose.p.z = xhand_start_pose.p.z + pose_dz
+        object_start_pose.p.x = wuji_start_pose.p.x
+        object_start_pose.p.y = wuji_start_pose.p.y + pose_dy
+        object_start_pose.p.z = wuji_start_pose.p.z + pose_dz
 
         if self.object_type_pool == ["pen"]:
-            object_start_pose.p.z = xhand_start_pose.p.z + 0.02
+            object_start_pose.p.z = wuji_start_pose.p.z + 0.02
 
         self.goal_displacement = gymapi.Vec3(-0.2, -0.06, 0.12)
         self.goal_displacement_tensor = to_torch(
@@ -426,10 +455,10 @@ class XHandHand(VecTask):
         goal_start_pose.p = object_start_pose.p + self.goal_displacement
         goal_start_pose.p.z -= 0.04
 
-        max_agg_bodies = self.num_xhand_bodies + 2
-        max_agg_shapes = self.num_xhand_shapes + max_obj_shapes * 2
+        max_agg_bodies = self.num_wuji_bodies + 2
+        max_agg_shapes = self.num_wuji_shapes + max_obj_shapes * 2
 
-        self.xhands = []
+        self.wujis = []
         self.envs = []
         self.object_init_state = []
         self.hand_start_states = []
@@ -438,11 +467,11 @@ class XHandHand(VecTask):
         self.object_indices = []
         self.goal_object_indices = []
 
-        xhand_rb_count = self.gym.get_asset_rigid_body_count(xhand_asset)
+        wuji_rb_count = self.gym.get_asset_rigid_body_count(wuji_asset)
         max_obj_rb_count = max(
             self.gym.get_asset_rigid_body_count(object_assets[t][0]) for t in unique_types
         )
-        self.object_rb_handles = list(range(xhand_rb_count, xhand_rb_count + max_obj_rb_count))
+        self.object_rb_handles = list(range(wuji_rb_count, wuji_rb_count + max_obj_rb_count))
 
         env_type_indices = [_random.randrange(len(self.object_type_pool))
                             for _ in range(self.num_envs)]
@@ -461,17 +490,17 @@ class XHandHand(VecTask):
             if self.aggregate_mode >= 1:
                 self.gym.begin_aggregate(env_ptr, max_agg_bodies, max_agg_shapes, True)
 
-            xhand_actor = self.gym.create_actor(
-                env_ptr, xhand_asset, xhand_start_pose, "hand", i, -1, 0)
+            wuji_actor = self.gym.create_actor(
+                env_ptr, wuji_asset, wuji_start_pose, "hand", i, -1, 0)
             self.hand_start_states.append([
-                xhand_start_pose.p.x, xhand_start_pose.p.y, xhand_start_pose.p.z,
-                xhand_start_pose.r.x, xhand_start_pose.r.y,
-                xhand_start_pose.r.z, xhand_start_pose.r.w,
+                wuji_start_pose.p.x, wuji_start_pose.p.y, wuji_start_pose.p.z,
+                wuji_start_pose.r.x, wuji_start_pose.r.y,
+                wuji_start_pose.r.z, wuji_start_pose.r.w,
                 0, 0, 0, 0, 0, 0,
             ])
-            self.gym.set_actor_dof_properties(env_ptr, xhand_actor, xhand_dof_props)
-            self.gym.enable_actor_dof_force_sensors(env_ptr, xhand_actor)
-            hand_idx = self.gym.get_actor_index(env_ptr, xhand_actor, gymapi.DOMAIN_SIM)
+            self.gym.set_actor_dof_properties(env_ptr, wuji_actor, wuji_dof_props)
+            self.gym.enable_actor_dof_force_sensors(env_ptr, wuji_actor)
+            hand_idx = self.gym.get_actor_index(env_ptr, wuji_actor, gymapi.DOMAIN_SIM)
             self.hand_indices.append(hand_idx)
 
             obj_type = self.object_type_pool[env_type_indices[i]]
@@ -513,7 +542,7 @@ class XHandHand(VecTask):
                 self.gym.end_aggregate(env_ptr)
 
             self.envs.append(env_ptr)
-            self.xhands.append(xhand_actor)
+            self.wujis.append(wuji_actor)
 
         object_rb_props = self.gym.get_actor_rigid_body_properties(env_ptr, object_handle)
         self.object_rb_masses = [prop.mass for prop in object_rb_props]
@@ -557,7 +586,7 @@ class XHandHand(VecTask):
                 self.fall_dist, self.fall_penalty,
                 self.max_consecutive_successes, self.av_factor,
                 (self.object_type_pool == ["pen"]),
-                self.object_linvel, self.object_angvel, self.xhand_dof_vel,
+                self.object_linvel, self.object_angvel, self.wuji_dof_vel,
                 self.root_state_tensor[self.hand_indices, 0:3],
                 self.obj_linvel_penalty_scale, self.obj_angvel_penalty_scale,
                 self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
@@ -603,11 +632,11 @@ class XHandHand(VecTask):
 
     def compute_full_state(self, asymm_obs=False):
         buf = self.states_buf if asymm_obs else self.obs_buf
-        n = self.num_xhand_dofs
+        n = self.num_wuji_dofs
 
         buf[:, 0:n] = unscale(
-            self.xhand_dof_pos, self.xhand_dof_lower_limits, self.xhand_dof_upper_limits)
-        buf[:, n:2*n] = self.vel_obs_scale * self.xhand_dof_vel
+            self.wuji_dof_pos, self.wuji_dof_lower_limits, self.wuji_dof_upper_limits)
+        buf[:, n:2*n] = self.vel_obs_scale * self.wuji_dof_vel
         buf[:, 2*n:3*n] = self.force_torque_obs_scale * self.dof_force_tensor
 
         obj_obs_start = 3 * n
@@ -632,6 +661,10 @@ class XHandHand(VecTask):
 
         obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
         buf[:, obs_end:obs_end + self.num_actions] = self.actions
+
+        if self.append_hand_base_pose and not asymm_obs:
+            pose_start = obs_end + self.num_actions
+            buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
 
     def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False):
         n = len(env_ids)
@@ -680,7 +713,7 @@ class XHandHand(VecTask):
             self.apply_randomizations(self.randomization_params)
 
         rand_floats = torch_rand_float(
-            -1.0, 1.0, (len(env_ids), self.num_xhand_dofs * 2 + 5), device=self.device)
+            -1.0, 1.0, (len(env_ids), self.num_wuji_dofs * 2 + 5), device=self.device)
 
         self.reset_target_pose(env_ids)
 
@@ -726,20 +759,20 @@ class XHandHand(VecTask):
             * torch.rand(len(env_ids), device=self.device)
             + torch.log(self.force_prob_range[1]))
 
-        # Reset XHand DOFs
-        delta_max = self.xhand_dof_upper_limits - self.xhand_dof_default_pos
-        delta_min = self.xhand_dof_lower_limits - self.xhand_dof_default_pos
+        # Reset Wuji DOFs
+        delta_max = self.wuji_dof_upper_limits - self.wuji_dof_default_pos
+        delta_min = self.wuji_dof_lower_limits - self.wuji_dof_default_pos
         rand_delta = delta_min + (delta_max - delta_min) * 0.5 * (
-            rand_floats[:, 5:5 + self.num_xhand_dofs] + 1)
+            rand_floats[:, 5:5 + self.num_wuji_dofs] + 1)
 
-        pos = self.xhand_default_dof_pos + self.reset_dof_pos_noise * rand_delta
-        self.xhand_dof_pos[env_ids, :] = pos
-        self.xhand_dof_vel[env_ids, :] = (
-            self.xhand_dof_default_vel
+        pos = self.wuji_default_dof_pos + self.reset_dof_pos_noise * rand_delta
+        self.wuji_dof_pos[env_ids, :] = pos
+        self.wuji_dof_vel[env_ids, :] = (
+            self.wuji_dof_default_vel
             + self.reset_dof_vel_noise
-            * rand_floats[:, 5 + self.num_xhand_dofs:5 + self.num_xhand_dofs * 2])
-        self.prev_targets[env_ids, :self.num_xhand_dofs] = pos
-        self.cur_targets[env_ids, :self.num_xhand_dofs] = pos
+            * rand_floats[:, 5 + self.num_wuji_dofs:5 + self.num_wuji_dofs * 2])
+        self.prev_targets[env_ids, :self.num_wuji_dofs] = pos
+        self.cur_targets[env_ids, :self.num_wuji_dofs] = pos
 
         hand_indices = self.hand_indices[env_ids].to(torch.int32)
         self.gym.set_dof_position_target_tensor_indexed(
@@ -768,19 +801,23 @@ class XHandHand(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
+        if self.wrist_action_clip < 1.0:
+            # First two action dims correspond to WRJ2 / WRJ1 (wrist).
+            self.actions[:, :2] = self.actions[:, :2].clamp(
+                -self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
             targets = (self.prev_targets[:, self.actuated_dof_indices]
-                       + self.xhand_dof_speed_scale * self.dt * self.action_speed_scale
+                       + self.wuji_dof_speed_scale * self.dt * self.action_speed_scale
                        * self.actions)
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(
                 targets,
-                self.xhand_dof_lower_limits[self.actuated_dof_indices],
-                self.xhand_dof_upper_limits[self.actuated_dof_indices])
+                self.wuji_dof_lower_limits[self.actuated_dof_indices],
+                self.wuji_dof_upper_limits[self.actuated_dof_indices])
         else:
             new_targets = scale(
                 self.actions,
-                self.xhand_dof_lower_limits[self.actuated_dof_indices],
-                self.xhand_dof_upper_limits[self.actuated_dof_indices])
+                self.wuji_dof_lower_limits[self.actuated_dof_indices],
+                self.wuji_dof_upper_limits[self.actuated_dof_indices])
             eff_moving_average = self.act_moving_average * self.action_speed_scale
             self.cur_targets[:, self.actuated_dof_indices] = (
                 eff_moving_average * new_targets
@@ -788,8 +825,8 @@ class XHandHand(VecTask):
                 * self.prev_targets[:, self.actuated_dof_indices])
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(
                 self.cur_targets[:, self.actuated_dof_indices],
-                self.xhand_dof_lower_limits[self.actuated_dof_indices],
-                self.xhand_dof_upper_limits[self.actuated_dof_indices])
+                self.wuji_dof_lower_limits[self.actuated_dof_indices],
+                self.wuji_dof_upper_limits[self.actuated_dof_indices])
 
         self.prev_targets[:, self.actuated_dof_indices] = \
             self.cur_targets[:, self.actuated_dof_indices]

@@ -1,5 +1,5 @@
 # used to create the object
-name: ShadowFlip
+name: WujiHandTilted
 
 physics_engine: ${..physics_engine}
 
@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 600
+  episodeLength: 500
   enableDebugVis: False
   aggregateMode: 1
 
@@ -31,63 +31,61 @@ env:
   resetDofVelRandomInterval: 0.0
 
   # Random forces applied to the object
-  forceScale: 0
-  forceProbRange: [0.01, 0.1]
+  forceScale: 0.0
+  forceProbRange: [0.001, 0.1]
   forceDecay: 0.99
   forceDecayInterval: 0.08
 
-  # Shared reward params (base class compatibility)
-  distRewardScale: 0.0
-  rotRewardScale: 0.0
+  # reward -> dictionary
+  distRewardScale: -10.0
+  rotRewardScale: 1.0
   rotEps: 0.1
-  actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
+  actionPenaltyScale: -0.002
+  reachGoalBonus: 300
   fallDistance: 0.24
-  fallPenalty: 0.0
+  fallPenalty: -300.0
 
   # Quasi-static manipulation penalties (negative = penalty)
-  objLinvelPenaltyScale: -0.01
-  objAngvelPenaltyScale: -0.005
-  dofVelPenaltyScale: -0.001
+  # Note: linvel/angvel penalties apply to object velocity *relative to palm* (see WujiHandTilted.compute_reward)
+  objLinvelPenaltyScale: -0.5
+  objAngvelPenaltyScale: -0.02
+  dofVelPenaltyScale: -0.01
+  palmDistPenaltyScale: -1.0
+  # Overspeed thresholds — penalty is zero below limit, grows exp above it
+  # formula: -scale * max(0, exp(|speed| - limit) - 1)
+  # linvel/angvel limits apply to relative speed (object - palm)
+  objLinvelLimit: 0.2       # m/s   — relative linear speed (object - palm)
+  objAngvelLimit: 1.0       # rad/s — relative angular speed (object - palm)
+  dofVelLimit: 2.0          # rad/s — per-joint angular speed threshold
 
-  # Flip-specific: orientation reward toward 90-deg target
-  orientRewardScale: 1.0
-  orientEps: 0.1
+  # Survive reward: bonus for holding the object past surviveStartFrame steps
+  surviveRewardScale: 0.01
+  surviveStartFrame: 400
 
-  # Flip-specific: time and rotation penalties to discourage wasted motion
-  timePenalty: -0.1                  # constant cost per step → pressures fast success
-  excessRotationPenaltyScale: -0.005 # penalty = total_rotation_so_far * scale (grows with spin)
+  # Wrist acceleration penalty: penalizes rapid wrist action changes (discourages tossing/flicking)
+  wristAccelPenaltyScale: -0.8
+  wristDofIndices: [0, 1]  # WRJ1 and WRJ0 are the first two DOFs in shadow_hand.xml
 
-  # Flip-specific: over-flip penalty (negative scale = penalty)
-  overFlipMargin: 0.2        # radians buffer above 90° before penalty kicks in (~11°)
-  overFlipPenaltyScale: -1.0 # proportional penalty per radian past 90°+margin
-
-  # Flip-specific: fingertip proximity reward
-  fingertipRewardScale: 0.1  # scale for 1/(min_fingertip_dist + eps) reward
-  fingertipEps: 0.1          # epsilon to avoid division by zero
-
-  # Flip-specific: settling phase
-  settleFrames: 30           # frames the block must stay near target to succeed
-  flipTolerance: 0.4         # radians (~23 deg) for flip detection and stable bonus
-  stableBonusPerFrame: 0.5   # reward per settling frame near target
-
-  # Base class compatibility (not used by ShadowFlip reward logic)
-  successTolerance: 0.1
-  palmDistPenaltyScale: 0.0
-
-  objectType: "block"        # block only (cube has stable flipped states)
-  objectTypePool: []
+  objectType: "block" # can be block, egg or pen
+  objectTypePool: []          # empty = single-type training using objectType above
   objectScaleRanges:
     block: [1, 1]
-    default: [0.8, 1.2]
-  observationType: "full_state"
+    egg: [0.6, 1.4]
+    pen: [0.6, 1.2]
+    default: [0.8, 1.2]      # applied to all ycb_* types
+  observationType: "full_state" # can be "openai", "full_no_vel", "full", "full_state"
   asymmetric_observations: False
+  successTolerance: 0.4
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
   # Wrist-action clip applied every step in BOTH training and test (see
-  # ShadowHand.yaml for the full description). 1.0 = no clip.
+  # WujiHand.yaml for the full description). 1.0 = no clip.
   wristActionClip: 1.0
+
+  # Base rotation parameters (rad/s)
+  baseAngVelMin: -0.2
+  baseAngVelMax: 0.2
 
   asset:
     assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"
@@ -95,20 +93,21 @@ env:
     assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
     assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
 
+  # set to True if you use camera sensors in the environment
   enableCameraSensors: False
 
 task:
   randomize: False
   randomization_params:
-    frequency: 720
+    frequency: 720   # Define how many simulation steps between generating new randomizations
     observations:
-      range: [0, .002]
-      range_correlated: [0, .001]
+      range: [0, .002] # range for the white noise
+      range_correlated: [0, .001] # range for correlated noise, refreshed with freq `frequency`
       operation: "additive"
       distribution: "gaussian"
     actions:
       range: [0., .05]
-      range_correlated: [0, .015]
+      range_correlated: [0, .015] # range for correlated noise, refreshed with freq `frequency`
       operation: "additive"
       distribution: "gaussian"
     sim_params:
@@ -180,7 +179,7 @@ sim:
   physx:
     num_threads: ${....num_threads}
     solver_type: ${....solver_type}
-    use_gpu: ${contains:"cuda",${....sim_device}}
+    use_gpu: ${contains:"cuda",${....sim_device}} # set to False to run on CPU
     num_position_iterations: 8
     num_velocity_iterations: 0
     max_gpu_contact_pairs: 8388608 # 8*1024*1024
@@ -190,4 +189,4 @@ sim:
     bounce_threshold_velocity: 0.2
     max_depenetration_velocity: 1000.0
     default_buffer_size_multiplier: 5.0
-    contact_collection: 0
+    contact_collection: 0 # 0: CC_NEVER (don't collect contact info), 1: CC_LAST_SUBSTEP (collect only contacts on last substep), 2: CC_ALL_SUBSTEPS (broken - do not use!)

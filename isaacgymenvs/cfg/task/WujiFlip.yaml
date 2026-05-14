@@ -1,11 +1,11 @@
-name: XHandDoor
+name: WujiFlip
 
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:2048,${...num_envs}}
-  envSpacing: 1.5
-  episodeLength: 250
+  numEnvs: ${resolve_default:8192,${...num_envs}}
+  envSpacing: 0.75
+  episodeLength: 600
   enableDebugVis: False
   aggregateMode: 1
 
@@ -18,6 +18,7 @@ env:
   useRelativeControl: False
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
+  actionSpeedScale: 1.0
   controlFrequencyInv: 1 # 60 Hz
 
   startPositionNoise: 0.01
@@ -28,34 +29,64 @@ env:
   resetDofPosRandomInterval: 0.2
   resetDofVelRandomInterval: 0.0
 
-  # Rewards
-  distRewardScale: 1.0
-  rotRewardScale: 0.0
-  rotEps: 0.1
+  # Random forces applied to the object
+  forceScale: 0
+  forceProbRange: [0.01, 0.1]
+  forceDecay: 0.99
+  forceDecayInterval: 0.08
+
+  # Flip-specific rewards (replaces distRewardScale/rotRewardScale from WujiHand)
+  orientRewardScale: 1.0
+  orientEps: 0.1
+  fingertipRewardScale: 0.1
+  fingertipEps: 0.1
+  overFlipMargin: 0.2
+  overFlipPenaltyScale: -1.0
+  timePenalty: -0.1
+  excessRotationPenaltyScale: -0.005
+  settleFrames: 30
+  flipTolerance: 0.4
+  stableBonusPerFrame: 0.5
+
+  # Shared penalties (compatible with WujiHand base class)
   actionPenaltyScale: -0.0002
   reachGoalBonus: 250
-  fallDistance: 1.5
+  fallDistance: 0.24
   fallPenalty: 0.0
+  objLinvelPenaltyScale: -0.01
+  objAngvelPenaltyScale: -0.05
+  dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: -0.5
+  objLinvelLimit: 0.4
+  objAngvelLimit: 8.0
+  dofVelLimit: 3.0
 
-  # Floating base force/torque scales
-  transitionScale: 1.0
-  orientationScale: 1.0
-
+  # These are read by base class but unused in WujiFlip reward; kept for compat
+  distRewardScale: -10.0
+  rotRewardScale: 0.0
+  rotEps: 0.1
   successTolerance: 0.3
+
+  objectType: "block"
+  objectTypePool: []
+  objectScaleRanges:
+    block: [1, 1]
+    egg: [0.8, 1.2]
+    pen: [0.6, 1.2]
+    default: [0.8, 1.2]
+  observationType: "full_state"
+  asymmetric_observations: False
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
-  # Wrist-action clip applied every step in BOTH training and test. The door
-  # task's action layout is [base_force (0:3), base_torque (3:6), DOF_targets
-  # (6:)], so the two XHand wrist DOFs are at action indices 6 and 7, which
-  # are the dims actually clamped. 1.0 = no clip.
+  # Wrist-action clip applied every step in BOTH training and test (see
+  # ShadowHand.yaml for the full description). 1.0 = no clip.
   wristActionClip: 1.0
 
-  observationType: "full_state"
-  asymmetric_observations: False
-
   asset:
-    assetFileNameDoor: "mjcf/door/mobility.urdf"
+    assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
+    assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
+    assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
 
   enableCameraSensors: False
 

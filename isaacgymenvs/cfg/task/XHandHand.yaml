@@ -66,6 +66,12 @@ env:
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
+  # When a goal is reached within an episode, the next goal is the current
+  # goal rotated by a random angle (degrees, sampled uniformly in [min, max])
+  # around a freshly sampled random unit axis.
+  goalRotDeltaDegMin: 20.0
+  goalRotDeltaDegMax: 30.0
+
   asset:
     assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
     assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"

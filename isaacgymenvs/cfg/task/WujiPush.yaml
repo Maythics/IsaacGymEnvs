@@ -1,11 +1,11 @@
-name: XHandDoor
+name: WujiPush
 
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:2048,${...num_envs}}
-  envSpacing: 1.5
-  episodeLength: 250
+  numEnvs: ${resolve_default:8192,${...num_envs}}
+  envSpacing: 0.75
+  episodeLength: 200
   enableDebugVis: False
   aggregateMode: 1
 
@@ -28,34 +28,65 @@ env:
   resetDofPosRandomInterval: 0.2
   resetDofVelRandomInterval: 0.0
 
-  # Rewards
-  distRewardScale: 1.0
+  # Random forces applied to the object
+  forceScale: 0.0
+  forceProbRange: [0.001, 0.1]
+  forceDecay: 0.99
+  forceDecayInterval: 0.08
+
+  # Shared reward params (distRewardScale active; rotRewardScale disabled)
+  distRewardScale: -10.0
   rotRewardScale: 0.0
   rotEps: 0.1
   actionPenaltyScale: -0.0002
-  reachGoalBonus: 250
-  fallDistance: 1.5
+  reachGoalBonus: 300
+  fallDistance: 0.24
   fallPenalty: 0.0
 
-  # Floating base force/torque scales
-  transitionScale: 1.0
-  orientationScale: 1.0
+  # Quasi-static manipulation penalties
+  objLinvelPenaltyScale: -0.01
+  objAngvelPenaltyScale: -0.005
+  dofVelPenaltyScale: -0.001
+  palmDistPenaltyScale: -0.5
 
-  successTolerance: 0.3
+  # Push-specific: yaw alignment reward
+  yawRewardScale: 1.0
+  yawEps: 0.1
+
+  # Push-specific: success conditions
+  successTolerance: 0.1
+  posSuccessTolerance: 0.02
+  yawSuccessTolerance: 1.6
+
+  # Push-specific: goal sampling
+  targetPosRangeXY: 0.02
+  targetPosRangeZ: 0.03
+
+  # Push-specific: anti-flip
+  uprightPenaltyScale: -0.5
+  flipAngle: 1.5708
+
+  # Trajectory mode
+  pushStepSize: 0.01
+
+  objectType: "block"
+  objectTypePool: []
+  objectScaleRanges:
+    block: [1, 1]
+    default: [0.8, 1.2]
+  observationType: "full_state"
+  asymmetric_observations: False
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
-  # Wrist-action clip applied every step in BOTH training and test. The door
-  # task's action layout is [base_force (0:3), base_torque (3:6), DOF_targets
-  # (6:)], so the two XHand wrist DOFs are at action indices 6 and 7, which
-  # are the dims actually clamped. 1.0 = no clip.
+  # Wrist-action clip applied every step in BOTH training and test (see
+  # ShadowHand.yaml for the full description). 1.0 = no clip.
   wristActionClip: 1.0
 
-  observationType: "full_state"
-  asymmetric_observations: False
-
   asset:
-    assetFileNameDoor: "mjcf/door/mobility.urdf"
+    assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
+    assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
+    assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
 
   enableCameraSensors: False
 

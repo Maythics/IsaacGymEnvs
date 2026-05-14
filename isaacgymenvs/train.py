@@ -98,6 +98,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     from isaacgymenvs.learning import amp_models
     from isaacgymenvs.learning import amp_network_builder
     from isaacgymenvs.learning import se3_network_builder
+    from isaacgymenvs.learning import wuji_se3_network_builder
     import isaacgymenvs
 
 
@@ -194,6 +195,10 @@ def launch_rlg_hydra(cfg: DictConfig):
         # SE(3)-equivariant wrapper: hand-frame preprocess in front of the standard actor_critic MLP.
         model_builder.register_model('continuous_a2c_logstd_se3', lambda network, **kwargs : se3_network_builder.SE3ModelA2CContinuousLogStd(network))
         model_builder.register_network('se3_actor_critic', lambda **kwargs : se3_network_builder.SE3Builder())
+
+        # Wuji SE(3) variant: same idea but with Wuji's 207-dim obs layout.
+        model_builder.register_model('continuous_a2c_logstd_se3_wuji', lambda network, **kwargs : wuji_se3_network_builder.WujiSE3ModelA2CContinuousLogStd(network))
+        model_builder.register_network('se3_actor_critic_wuji', lambda **kwargs : wuji_se3_network_builder.WujiSE3Builder())
 
         return runner
 

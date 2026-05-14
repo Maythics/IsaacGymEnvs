@@ -79,6 +79,10 @@ env:
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
+  # Wrist-action clip applied every step in BOTH training and test (see
+  # ShadowHand.yaml for the full description). 1.0 = no clip.
+  wristActionClip: 1.0
+
   # Base rotation parameters (rad/s)
   baseAngVelMin: -0.2
   baseAngVelMax: 0.2

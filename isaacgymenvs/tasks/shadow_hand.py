@@ -58,6 +58,11 @@ class ShadowHand(VecTask):
         self.fall_penalty = self.cfg["env"]["fallPenalty"]
         self.rot_eps = self.cfg["env"]["rotEps"]
 
+        self.goal_rot_delta_min = float(np.deg2rad(self.cfg["env"].get("goalRotDeltaDegMin", 20.0)))
+        self.goal_rot_delta_max = float(np.deg2rad(self.cfg["env"].get("goalRotDeltaDegMax", 30.0)))
+
+        self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
+
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.force_torque_obs_scale = 10.0  # scale factor of velocity based observations
 
@@ -665,16 +670,26 @@ class ShadowHand(VecTask):
                 pose_start = obs_end + self.num_actions  # 211
                 self.obs_buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
 
-    def reset_target_pose(self, env_ids, apply_reset=False):
-        rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), 4), device=self.device)
-
-        new_rot = randomize_rotation(rand_floats[:, 0], rand_floats[:, 1], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
-        pen_mask = self.is_pen[env_ids]
-        if pen_mask.any():
-            pen_rot = randomize_rotation_pen(rand_floats[:, 0], rand_floats[:, 1], torch.tensor(0.3),
-                                             self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids],
-                                             self.z_unit_tensor[env_ids])
-            new_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_rot)
+    def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False):
+        n = len(env_ids)
+        if from_goal_reach:
+            axis = torch.randn(n, 3, device=self.device)
+            axis = axis / axis.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            angle = (torch.rand(n, device=self.device)
+                     * (self.goal_rot_delta_max - self.goal_rot_delta_min)
+                     + self.goal_rot_delta_min)
+            delta_quat = quat_from_angle_axis(angle, axis)
+            current_rot = self.goal_states[env_ids, 3:7].clone()
+            new_rot = quat_mul(delta_quat, current_rot)
+        else:
+            rand_floats = torch_rand_float(-1.0, 1.0, (n, 4), device=self.device)
+            new_rot = randomize_rotation(rand_floats[:, 0], rand_floats[:, 1], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
+            pen_mask = self.is_pen[env_ids]
+            if pen_mask.any():
+                pen_rot = randomize_rotation_pen(rand_floats[:, 0], rand_floats[:, 1], torch.tensor(0.3),
+                                                 self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids],
+                                                 self.z_unit_tensor[env_ids])
+                new_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_rot)
 
         self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
         self.goal_states[env_ids, 3:7] = new_rot
@@ -763,15 +778,20 @@ class ShadowHand(VecTask):
 
         # if only goals need reset, then call set API
         if len(goal_env_ids) > 0 and len(env_ids) == 0:
-            self.reset_target_pose(goal_env_ids, apply_reset=True)
+            self.reset_target_pose(goal_env_ids, apply_reset=True, from_goal_reach=True)
         # if goals need reset in addition to other envs, call set API in reset_idx()
         elif len(goal_env_ids) > 0:
-            self.reset_target_pose(goal_env_ids)
+            self.reset_target_pose(goal_env_ids, from_goal_reach=True)
 
         if len(env_ids) > 0:
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
+        if self.wrist_action_clip < 1.0:
+            # First two action dims correspond to WRJ1 / WRJ0 (wrist).
+            # Clamp applied in both training and test so the env (and the
+            # policy's next observation) always sees the constrained action.
+            self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
             targets = self.prev_targets[:, self.actuated_dof_indices] + self.shadow_hand_dof_speed_scale * self.dt * self.action_speed_scale * self.actions
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(targets,

@@ -68,6 +68,10 @@ env:
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
+  # Wrist-action clip applied every step in BOTH training and test (see
+  # ShadowHand.yaml for the full description). 1.0 = no clip.
+  wristActionClip: 1.0
+
   # Quasi-static penalties: penalize object motion, hand shaking, and high torques
   objLinvelPenaltyScale: -0.05   # penalize object linear velocity (L2 squared)
   objAngvelPenaltyScale: -0.02   # penalize object angular velocity (L2 squared)

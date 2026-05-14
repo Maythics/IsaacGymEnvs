@@ -45,6 +45,12 @@ env:
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
+  # Wrist-action clip applied every step in BOTH training and test. The door
+  # task's action layout is [base_force (0:3), base_torque (3:6), DOF_targets
+  # (6:26)], so the wrist DOFs (WRJ1, WRJ0) are at action indices 6 and 7,
+  # which are the dims actually clamped. 1.0 = no clip.
+  wristActionClip: 1.0
+
   observationType: "full_state"
   asymmetric_observations: False
 

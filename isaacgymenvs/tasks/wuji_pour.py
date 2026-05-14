@@ -1,14 +1,8 @@
-"""ShadowPour: ShadowHand variant trained to grasp a bottle and pour.
+"""WujiPour: WujiHand variant with the same pour task as ShadowPour.
 
-The hand spawns rolled 80-100° about a fixed axis so the palm faces upward.
-A bottle (rigid body, no cap articulation) spawns near the palm. The agent
-must grasp the bottle and then track a sequence of sub-goal orientations
-that sweep from upright (long axis along world +Z) to ~90° pitched, mimicking
-a pouring motion.
-
-Observation layout matches ShadowHand exactly (211 dims for full_state). The
-parent's `goal_states` slot carries the *current* sub-goal pose, so the
-policy sees the active waypoint without any obs-dim change.
+Differs only in the underlying robot (Wuji has 22 DOFs and 207-dim
+observations); the sub-goal trajectory, phase tracking, and reward share
+the same helpers as ShadowPour.
 """
 
 import math
@@ -17,7 +11,7 @@ import torch
 
 from isaacgym import gymapi, gymtorch
 
-from isaacgymenvs.tasks.shadow_hand import ShadowHand
+from isaacgymenvs.tasks.wuji_hand import WujiHand
 from isaacgymenvs.tasks._pour_common import build_subgoal_quats, compute_pour_reward
 from isaacgymenvs.utils.torch_jit_utils import (
     quat_apply,
@@ -29,15 +23,13 @@ from isaacgymenvs.utils.torch_jit_utils import (
 )
 
 
-class ShadowPour(ShadowHand):
+class WujiPour(WujiHand):
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id,
                  headless, virtual_screen_capture, force_render):
-        # Force the bottle to be the only object type for this task
         cfg["env"]["objectType"] = "bottle"
         cfg["env"]["objectTypePool"] = ["bottle"]
 
-        # Pour-task hyperparameters (read before super so they apply once env exists)
         self.roll_angle_min = float(cfg["env"].get("rollAngleMin", math.radians(80.0)))
         self.roll_angle_max = float(cfg["env"].get("rollAngleMax", math.radians(100.0)))
         self._roll_axis_cfg = cfg["env"].get("rollAxis", [1.0, 0.0, 0.0])
@@ -47,12 +39,20 @@ class ShadowPour(ShadowHand):
         self._pour_pitch_axis_cfg = cfg["env"].get("pourPitchAxis", [1.0, 0.0, 0.0])
 
         self.bottle_spawn_pos_noise = float(cfg["env"].get("bottleSpawnPosNoise", 0.03))
-        # Per-axis world-frame offset added on top of the palm anchor so the
-        # bottle spawns into the grasp zone (in front of / above the palm).
+        # World-frame biases on top of the palm anchor (match ShadowPour defaults)
         self.bottle_spawn_x_bias = float(cfg["env"].get("bottleSpawnXBias", 0.03))
         self.bottle_spawn_y_bias = float(cfg["env"].get("bottleSpawnYBias", 0.08))
         self.bottle_spawn_z_offset = float(cfg["env"].get("bottleSpawnZOffset", 0.10))
         self.bottle_spawn_rot_noise = float(cfg["env"].get("bottleSpawnRotNoise", 0.2))
+
+        # Two ways to align Wuji's palm with ShadowPour's palm:
+        #   - palmWorldTarget: target palm world position; the hand base is
+        #     auto-translated so the palm lands here. Read ShadowPour's
+        #     printed palm world position and paste it into the YAML.
+        #   - handBasePosOverride: direct base-position override (fallback).
+        # palmWorldTarget takes precedence when both are set.
+        self._palm_world_target_cfg = cfg["env"].get("palmWorldTarget", None)
+        self._hand_base_pos_override = cfg["env"].get("handBasePosOverride", None)
 
         self.grasp_proximity_scale = float(cfg["env"].get("graspProximityScale", -5.0))
         self.grasp_contact_scale = float(cfg["env"].get("graspContactScale", -2.0))
@@ -71,7 +71,6 @@ class ShadowPour(ShadowHand):
         super().__init__(cfg, rl_device, sim_device, graphics_device_id,
                          headless, virtual_screen_capture, force_render)
 
-        # ----- Per-env state buffers -----
         device = self.device
         N = self.num_envs
 
@@ -83,12 +82,6 @@ class ShadowPour(ShadowHand):
         self.hand_initial_quat = self.root_state_tensor[self.hand_indices, 3:7].clone()
         self.hand_initial_pos = self.root_state_tensor[self.hand_indices, 0:3].clone()
 
-        # Palm pose expressed in the hand-root *local* frame, captured once at init.
-        # Position: palm_world - hand_pos (rotated by R_init^-1) → palm in hand-root local frame.
-        # Rotation: R_init^-1 * R_palm → palm rotation in hand-root local frame.
-        # These are constants (per asset) and let us forward-kinematics the palm
-        # under any new hand rotation, plus apply palm-local biases that follow
-        # the hand as it rolls.
         palm_world_init = self.rigid_body_states[:, self.palm_body_idx, 0:3]
         palm_world_rot_init = self.rigid_body_states[:, self.palm_body_idx, 3:7]
         palm_offset_world = (palm_world_init[0] - self.hand_initial_pos[0]).clone()
@@ -96,33 +89,46 @@ class ShadowPour(ShadowHand):
         self.palm_local_offset = quat_apply(q_init_inv, palm_offset_world.unsqueeze(0)).squeeze(0)
         self.palm_local_rot = quat_mul(q_init_inv, palm_world_rot_init[0:1]).squeeze(0)
 
+        # Resolve hand base override
+        override = None
+        if self._palm_world_target_cfg is not None and len(self._palm_world_target_cfg) == 3:
+            target = to_torch(self._palm_world_target_cfg, device=device, dtype=torch.float)
+            # palm_world = hand_pos + R_init * palm_local_offset → solve for hand_pos
+            palm_offset_world_init = quat_apply(
+                self.hand_initial_quat[0:1],
+                self.palm_local_offset.unsqueeze(0),
+            ).squeeze(0)
+            override = target - palm_offset_world_init
+        elif self._hand_base_pos_override is not None and len(self._hand_base_pos_override) == 3:
+            override = to_torch(self._hand_base_pos_override, device=device, dtype=torch.float)
+
+        if override is not None:
+            self.hand_initial_pos[:] = override.unsqueeze(0).expand(N, 3)
+            self.root_state_tensor[self.hand_indices, 0:3] = self.hand_initial_pos
+            self.root_state_tensor[self.hand_indices, 7:13] = 0.0
+            self._push_root_state(self.hand_indices.to(torch.int32))
+            palm_world_default = (
+                self.hand_initial_pos[0]
+                + quat_apply(self.hand_initial_quat[0:1],
+                             self.palm_local_offset.unsqueeze(0)).squeeze(0)
+            )
+            print(f"[WujiPour] palm world position (at default rotation) = "
+                  f"{palm_world_default.tolist()}")
+
         self.hand_current_quat = self.hand_initial_quat.clone()
 
         self.phase = torch.zeros(N, dtype=torch.long, device=device)
         self.is_grasped = torch.zeros(N, dtype=torch.bool, device=device)
         self.subgoal_hold_buf = torch.zeros(N, dtype=torch.long, device=device)
 
-        # Pre-compute the canonical sub-goal sequence (same across envs).
         canonical = build_subgoal_quats(
             self.num_subgoals, self.pour_final_pitch,
             self.pour_pitch_axis_tensor, device,
-        )  # (num_subgoals, 4)
+        )
         self.subgoal_quats = canonical.unsqueeze(0).expand(N, self.num_subgoals, 4).contiguous()
 
-        # Initialize hand orientation for all envs on first reset
         all_env_ids = torch.arange(N, device=device)
         self._apply_hand_roll(all_env_ids)
-
-        # Compute and report the palm world position (pre-roll). Use this as
-        # `palmWorldTarget` in XHandPour.yaml to auto-align XHand's palm.
-        palm_world_default = (
-            self.hand_initial_pos[0]
-            + quat_apply(self.hand_initial_quat[0:1],
-                         self.palm_local_offset.unsqueeze(0)).squeeze(0)
-        )
-        print(f"[ShadowPour] palm world position (at default rotation) = "
-              f"{palm_world_default.tolist()}")
-
         self._respawn_bottle(all_env_ids)
         self._push_root_state(torch.cat([
             self.hand_indices[all_env_ids],
@@ -130,7 +136,7 @@ class ShadowPour(ShadowHand):
         ]).to(torch.int32))
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Helpers (mirror ShadowPour with wuji_dof_vel substitution downstream)
     # ------------------------------------------------------------------
 
     def _apply_hand_roll(self, env_ids):
@@ -147,26 +153,21 @@ class ShadowPour(ShadowHand):
 
     def _respawn_bottle(self, env_ids):
         n = len(env_ids)
-        # Forward-kinematics the palm under the freshly-rolled hand orientation.
-        # This anchors the spawn at the palm link rather than the hand base.
         palm_offset_world = quat_apply(
             self.hand_current_quat[env_ids],
             self.palm_local_offset.unsqueeze(0).expand(n, 3),
         )
         palm_world = self.hand_initial_pos[env_ids] + palm_offset_world
 
-        # World-frame biases and noise: identical YAML values + identical seed →
-        # identical bottle world poses across ShadowPour / XHandPour, provided
-        # the palms are co-located in world space.
+        # World-frame biases and noise (mirrors ShadowPour). Same seed + same
+        # YAML values + same palm world position → identical bottle world pose.
         rand = torch_rand_float(-1.0, 1.0, (n, 3), device=self.device)
         bottle_pos = palm_world.clone()
         bottle_pos[:, 0] += self.bottle_spawn_x_bias + self.bottle_spawn_pos_noise * rand[:, 0]
         bottle_pos[:, 1] += self.bottle_spawn_y_bias + self.bottle_spawn_pos_noise * rand[:, 1]
         bottle_pos[:, 2] += self.bottle_spawn_z_offset + self.bottle_spawn_pos_noise * rand[:, 2]
 
-        # Small random orientation perturbation around upright
         rand = torch_rand_float(-1.0, 1.0, (n, 3), device=self.device)
-        # roll/pitch/yaw within bottle_spawn_rot_noise rad
         rx = quat_from_angle_axis(rand[:, 0] * self.bottle_spawn_rot_noise, self.x_unit_tensor[env_ids])
         ry = quat_from_angle_axis(rand[:, 1] * self.bottle_spawn_rot_noise, self.y_unit_tensor[env_ids])
         rz = quat_from_angle_axis(rand[:, 2] * self.bottle_spawn_rot_noise, self.z_unit_tensor[env_ids])
@@ -185,7 +186,6 @@ class ShadowPour(ShadowHand):
         )
 
     def _fall_ref_pos(self):
-        # Use palm body position so bottle drop is detected by palm-relative distance
         return self.rigid_body_states[:, self.palm_body_idx, 0:3]
 
     # ------------------------------------------------------------------
@@ -245,19 +245,14 @@ class ShadowPour(ShadowHand):
 
     def pre_physics_step(self, actions):
         super().pre_physics_step(actions)
-        # Pin the hand at its rolled orientation each step (the hand is fixed-base
-        # in the asset, but writing the root pose here keeps it stable under contact
-        # forces propagated through the kinematic chain — same approach as ShadowHandTilted).
         self.root_state_tensor[self.hand_indices, 3:7] = self.hand_current_quat
         self.root_state_tensor[self.hand_indices, 7:13] = 0.0
         all_hand_indices = self.hand_indices.to(torch.int32)
         self._push_root_state(all_hand_indices)
 
     def compute_observations(self):
-        # Update goal_states to the current sub-goal before parent populates obs
         env_arange = torch.arange(self.num_envs, device=self.device)
         cur_subgoal_quat = self.subgoal_quats[env_arange, self.phase]
-        # Sub-goal position is anchored to the palm so the policy sees a meaningful target location
         self.goal_states[:, 0:3] = self.rigid_body_states[:, self.palm_body_idx, 0:3]
         self.goal_states[:, 3:7] = cur_subgoal_quat
         super().compute_observations()
@@ -275,7 +270,7 @@ class ShadowPour(ShadowHand):
             self.subgoal_quats,
             palm_pos,
             fingertip_pos,
-            self.actions, self.shadow_hand_dof_vel,
+            self.actions, self.wuji_dof_vel,
             self.grasp_proximity_scale,
             self.grasp_contact_scale,
             self.grasp_bonus,

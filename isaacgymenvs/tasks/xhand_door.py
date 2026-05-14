@@ -90,6 +90,8 @@ class XHandDoor(VecTask):
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
 
+        self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
+
         self.transition_scale = self.cfg["env"]["transitionScale"]
         self.orientation_scale = self.cfg["env"]["orientationScale"]
 
@@ -575,6 +577,11 @@ class XHandDoor(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
+        if self.wrist_action_clip < 1.0:
+            # Action layout for the door task is
+            # [base_xyz_force (0:3), base_xyz_torque (3:6), DOF_targets (6:)].
+            # The XHand's two wrist DOFs are the first two hand DOFs, at 6:8.
+            self.actions[:, 6:8] = self.actions[:, 6:8].clamp(-self.wrist_action_clip, self.wrist_action_clip)
 
         # Zero out force buffers
         self.apply_forces[:] = 0

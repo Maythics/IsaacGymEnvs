@@ -7,7 +7,7 @@ physics_engine: ${..physics_engine}
 env: 
   numEnvs: ${resolve_default:16384,${...num_envs}}
   envSpacing: 0.75
-  episodeLength: 600
+  episodeLength: 900
   enableDebugVis: False
   aggregateMode: 1
 
@@ -72,6 +72,21 @@ env:
   successTolerance: 0.3
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
+
+  # When a goal is reached within an episode, the next goal is the current
+  # goal rotated by a random angle (degrees, sampled uniformly in [min, max])
+  # around a freshly sampled random unit axis.
+  goalRotDeltaDegMin: 20.0
+  goalRotDeltaDegMax: 30.0
+
+  # Wrist-action clip applied every step in BOTH training and test: the first
+  # 2 action dims (WRJ1, WRJ0) are clamped to
+  # [-wristActionClip, +wristActionClip] before being applied to the env. The
+  # policy still emits full-range actions, but the env only ever sees the
+  # clipped value, and the next-step observation reflects the clipped action.
+  # 1.0 = no clip (action range is already [-1, 1]); smaller values progressively
+  # freeze the palm (e.g. 0.05 = near-static wrist for trajectory collection).
+  wristActionClip: 0.05
 
   asset:
     assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"

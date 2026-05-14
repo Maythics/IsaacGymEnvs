@@ -52,6 +52,11 @@ from .xhand_hand import XHandHand
 from .xhand_push import XHandPush
 from .xhand_flip import XHandFlip
 from .xhand_pour import XHandPour
+from .wuji_hand import WujiHand
+from .wuji_hand_tilted import WujiHandTilted
+from .wuji_flip import WujiFlip
+from .wuji_push import WujiPush
+from .wuji_pour import WujiPour
 from .shadow_door import ShadowDoor
 from .xhand_door import XHandDoor
 from .allegro_hand import AllegroHand
@@ -131,6 +136,11 @@ isaacgym_task_map = {
     "XHandPush": XHandPush,
     "XHandFlip": XHandFlip,
     "XHandPour": XHandPour,
+    "WujiHand": WujiHand,
+    "WujiHandTiltedSE3": WujiHandTilted,
+    "WujiFlip": WujiFlip,
+    "WujiPush": WujiPush,
+    "WujiPour": WujiPour,
     "ShadowDoor": ShadowDoor,
     "XHandDoor": XHandDoor,
     "Trifinger": Trifinger,

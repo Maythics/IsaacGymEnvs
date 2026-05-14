@@ -1,0 +1,13 @@
+# SE(3)-equivariant variant of WujiHandTilted.
+# Identical physics/reward/randomization as WujiHandTilted; the only difference
+# is that the observation appends hand_root_pos(3) + hand_root_quat(4) (so 218 total).
+# Train with WujiHandTiltedSE3PPO which selects the hand-frame preprocess model.
+
+defaults:
+  - WujiHandTilted
+  - _self_
+
+name: WujiHandTiltedSE3
+
+env:
+  appendHandBasePose: True
