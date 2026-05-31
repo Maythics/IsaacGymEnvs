@@ -34,6 +34,7 @@ from isaacgym import gymapi
 from isaacgymenvs.utils.torch_jit_utils import (
     scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, quat_apply,
     to_torch, get_axis_params, torch_rand_float, tensor_clamp, get_euler_xyz,
+    shrink_dof_limits_inplace,
 )
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
@@ -274,6 +275,13 @@ class ShadowDoor(VecTask):
         ]
 
         hand_dof_props = self.gym.get_asset_dof_properties(hand_asset)
+
+        # Hard physical wrist limit: wrist actuators are at action dims 6/7.
+        shrink_dof_limits_inplace(
+            hand_dof_props,
+            [int(self.actuated_dof_indices[6]), int(self.actuated_dof_indices[7])],
+            self.wrist_action_clip,
+        )
 
         self.shadow_hand_dof_lower_limits = []
         self.shadow_hand_dof_upper_limits = []

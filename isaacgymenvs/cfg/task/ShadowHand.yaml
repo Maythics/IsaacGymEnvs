@@ -33,7 +33,7 @@ env:
 
   # Random forces applied to the object
   forceScale: 0
-  forceProbRange: [0.01, 0.1]
+  forceProbRange: [0.05, 0.1]
   forceDecay: 0.99
   forceDecayInterval: 0.08
 
@@ -78,6 +78,23 @@ env:
   # around a freshly sampled random unit axis.
   goalRotDeltaDegMin: 20.0
   goalRotDeltaDegMax: 30.0
+
+  # Track goal position in addition to orientation. When True, success requires
+  # both rot_dist <= successTolerance AND ||object_pos - goal_pos|| <= posSuccessTolerance.
+  # Initial goal position equals the (randomized) object init position offset
+  # downward by initGoalDownOffset (the object falls a bit under gravity before
+  # settling). Each new subgoal is sampled within [goalPosDeltaMin,
+  # goalPosDeltaMax] meters of the previous in a random direction, then clamped
+  # to a ball of radius goalPosMaxRadius around object_init_state to prevent
+  # unbounded drift.
+  trackGoalPos: True
+  posSuccessTolerance: 0.025
+  goalPosDeltaMin: 0.01
+  goalPosDeltaMax: 0.02
+  goalPosMaxRadius: 0.04
+  # Vertical drift is harder than horizontal — bound world-z offset to ±3 cm.
+  goalPosZMaxRadius: 0.03
+  initGoalDownOffset: 0.08
 
   # Wrist-action clip applied every step in BOTH training and test: the first
   # 2 action dims (WRJ1, WRJ0) are clamped to

@@ -36,6 +36,7 @@ from isaacgym import gymapi
 from isaacgymenvs.utils.torch_jit_utils import (
     scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, quat_apply,
     to_torch, get_axis_params, torch_rand_float, tensor_clamp, get_euler_xyz,
+    shrink_dof_limits_inplace,
 )
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
@@ -262,6 +263,9 @@ class XHandDoor(VecTask):
             xhand_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
             xhand_dof_props['stiffness'][i] = 2.0
             xhand_dof_props['damping'][i] = 0.1
+
+        # Hard physical wrist limit: wrist DOFs are at action dims 6/7.
+        shrink_dof_limits_inplace(xhand_dof_props, [6, 7], self.wrist_action_clip)
 
         # All DOFs are actuated
         self.actuated_dof_indices = to_torch(

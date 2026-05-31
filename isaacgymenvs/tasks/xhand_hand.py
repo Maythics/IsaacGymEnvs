@@ -55,6 +55,7 @@ from isaacgym import gymapi
 from isaacgymenvs.utils.torch_jit_utils import (
     scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, quat_apply,
     to_torch, get_axis_params, torch_rand_float, tensor_clamp,
+    shrink_dof_limits_inplace,
 )
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
@@ -126,6 +127,12 @@ class XHandHand(VecTask):
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.action_speed_scale = self.cfg["env"].get("actionSpeedScale", 1.0)
+
+        # wristActionClip: when < 1.0, clamps the first 2 action dims (wrist)
+        # to [-c, +c] and shrinks the URDF wrist joint range to a matching
+        # symmetric window around the original midpoint so PhysX enforces
+        # the bound as a hard physical stop.
+        self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -340,6 +347,9 @@ class XHandHand(VecTask):
             xhand_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
             xhand_dof_props['stiffness'][i] = 2.0
             xhand_dof_props['damping'][i] = 0.1
+
+        # Hard physical wrist limit: wrist DOFs are at indices 0/1.
+        shrink_dof_limits_inplace(xhand_dof_props, [0, 1], self.wrist_action_clip)
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
@@ -768,6 +778,9 @@ class XHandHand(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
+        if self.wrist_action_clip < 1.0:
+            # First two action dims correspond to the wrist DOFs.
+            self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
             targets = (self.prev_targets[:, self.actuated_dof_indices]
                        + self.xhand_dof_speed_scale * self.dt * self.action_speed_scale

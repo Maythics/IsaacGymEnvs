@@ -244,6 +244,25 @@ def unscale_np(x, lower, upper):
     return (2.0 * x - upper - lower) / (upper - lower)
 
 
+def shrink_dof_limits_inplace(dof_props, dof_indices, fraction):
+    # Hard-clamp a subset of DOFs to a tighter symmetric range around the
+    # original URDF midpoint so PhysX enforces it as a physical stop. No-op
+    # when fraction >= 1.0.
+    if fraction >= 1.0:
+        return
+    for k in dof_indices:
+        lo = float(dof_props['lower'][k])
+        hi = float(dof_props['upper'][k])
+        mid = 0.5 * (lo + hi)
+        half = 0.5 * (hi - lo) * fraction
+        new_lo = mid - half
+        new_hi = mid + half
+        dof_props['lower'][k] = new_lo
+        dof_props['upper'][k] = new_hi
+        print(f"[shrink_dof_limits_inplace] DOF {k}: "
+              f"[{lo:.4f}, {hi:.4f}] -> [{new_lo:.4f}, {new_hi:.4f}]")
+
+
 @torch.jit.script
 def compute_heading_and_up(
     torso_rotation, inv_start_rot, to_target, vec0, vec1, up_idx

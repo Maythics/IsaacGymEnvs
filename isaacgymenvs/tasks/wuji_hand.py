@@ -55,6 +55,7 @@ from isaacgym import gymapi
 from isaacgymenvs.utils.torch_jit_utils import (
     scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, quat_apply,
     to_torch, get_axis_params, torch_rand_float, tensor_clamp,
+    shrink_dof_limits_inplace,
 )
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
@@ -356,6 +357,12 @@ class WujiHand(VecTask):
             else:
                 wuji_dof_props['stiffness'][i] = 2.0
                 wuji_dof_props['damping'][i] = 0.1
+
+        # Hard physical wrist limit: when wristActionClip < 1.0, tighten the
+        # URDF joint range on the wrist DOFs so PhysX enforces it as a stop
+        # regardless of contact forces. The action-side clamp in
+        # pre_physics_step keeps the commanded target consistent with this.
+        shrink_dof_limits_inplace(wuji_dof_props, [0, 1], self.wrist_action_clip)
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
@@ -803,8 +810,7 @@ class WujiHand(VecTask):
         self.actions = actions.clone().to(self.device)
         if self.wrist_action_clip < 1.0:
             # First two action dims correspond to WRJ2 / WRJ1 (wrist).
-            self.actions[:, :2] = self.actions[:, :2].clamp(
-                -self.wrist_action_clip, self.wrist_action_clip)
+            self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
             targets = (self.prev_targets[:, self.actuated_dof_indices]
                        + self.wuji_dof_speed_scale * self.dt * self.action_speed_scale

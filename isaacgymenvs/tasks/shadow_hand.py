@@ -34,7 +34,7 @@ from isaacgym import gymtorch
 from isaacgym import gymapi
 
 from isaacgymenvs.utils.torch_jit_utils import scale, unscale, quat_mul, quat_conjugate, quat_from_angle_axis, \
-    to_torch, get_axis_params, torch_rand_float, tensor_clamp  
+    to_torch, get_axis_params, torch_rand_float, tensor_clamp, shrink_dof_limits_inplace
 
 from isaacgymenvs.tasks.base.vec_task import VecTask
 
@@ -60,6 +60,17 @@ class ShadowHand(VecTask):
 
         self.goal_rot_delta_min = float(np.deg2rad(self.cfg["env"].get("goalRotDeltaDegMin", 20.0)))
         self.goal_rot_delta_max = float(np.deg2rad(self.cfg["env"].get("goalRotDeltaDegMax", 30.0)))
+
+        self.track_goal_pos = bool(self.cfg["env"].get("trackGoalPos", False))
+        self.pos_success_tolerance = float(self.cfg["env"].get("posSuccessTolerance", 0.025))
+        self.goal_pos_delta_min = float(self.cfg["env"].get("goalPosDeltaMin", 0.0))
+        self.goal_pos_delta_max = float(self.cfg["env"].get("goalPosDeltaMax", 0.01))
+        self.goal_pos_max_radius = float(self.cfg["env"].get("goalPosMaxRadius", 0.05))
+        # Tighter half-range on the world-frame z axis (vertical motion is hard).
+        self.goal_pos_z_max_radius = float(self.cfg["env"].get("goalPosZMaxRadius", 0.03))
+        # Initial goal sits this far BELOW the (randomized) object init pos
+        # because the object will fall a bit under gravity before settling.
+        self.init_goal_down_offset = float(self.cfg["env"].get("initGoalDownOffset", 0.04))
 
         self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
 
@@ -309,6 +320,15 @@ class ShadowHand(VecTask):
         # get shadow_hand dof properties, loaded by Isaac Gym from the MJCF file
         shadow_hand_dof_props = self.gym.get_asset_dof_properties(shadow_hand_asset)
 
+        # Hard physical wrist limit: when wristActionClip < 1.0, tighten the
+        # joint range on the wrist DOFs (first two actuators -> WRJ1/WRJ0)
+        # so PhysX enforces it as a stop regardless of contact forces.
+        shrink_dof_limits_inplace(
+            shadow_hand_dof_props,
+            [int(self.actuated_dof_indices[0]), int(self.actuated_dof_indices[1])],
+            self.wrist_action_clip,
+        )
+
         self.shadow_hand_dof_lower_limits = []
         self.shadow_hand_dof_upper_limits = []
         self.shadow_hand_dof_default_pos = []
@@ -489,6 +509,8 @@ class ShadowHand(VecTask):
         return self.goal_pos
 
     def compute_reward(self, actions):
+        # 1e6 sentinel disables the position-tolerance check when the feature is off
+        pos_tol = self.pos_success_tolerance if self.track_goal_pos else 1e6
         self.rew_buf[:], self.reset_buf[:], self.reset_goal_buf[:], self.progress_buf[:], self.successes[:], self.consecutive_successes[:] = compute_hand_reward(
             self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes, self.consecutive_successes,
             self.max_episode_length, self.object_pos, self.object_rot, self.goal_pos, self.goal_rot,
@@ -501,6 +523,7 @@ class ShadowHand(VecTask):
             self.dof_vel_penalty_scale, self.palm_dist_penalty_scale,
             self.obj_linvel_limit, self.obj_angvel_limit, self.dof_vel_limit,
             self._fall_ref_pos(),
+            pos_tol,
         )
 
         self.extras['consecutive_successes'] = self.consecutive_successes.mean()
@@ -670,7 +693,7 @@ class ShadowHand(VecTask):
                 pose_start = obs_end + self.num_actions  # 211
                 self.obs_buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
 
-    def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False):
+    def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False, base_pos=None):
         n = len(env_ids)
         if from_goal_reach:
             axis = torch.randn(n, 3, device=self.device)
@@ -691,7 +714,36 @@ class ShadowHand(VecTask):
                                                  self.z_unit_tensor[env_ids])
                 new_rot = torch.where(pen_mask.unsqueeze(-1), pen_rot, new_rot)
 
-        self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
+        if self.track_goal_pos:
+            if from_goal_reach:
+                pos_dir = torch.randn(n, 3, device=self.device)
+                pos_dir = pos_dir / pos_dir.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                pos_mag = (torch.rand(n, device=self.device)
+                           * (self.goal_pos_delta_max - self.goal_pos_delta_min)
+                           + self.goal_pos_delta_min)
+                new_pos = self.goal_states[env_ids, 0:3].clone() + pos_dir * pos_mag.unsqueeze(-1)
+                # Clamp drift around the first-goal position (object_init shifted
+                # down by init_goal_down_offset along the up axis), so the small
+                # z-radius doesn't snap subsequent goals back up to object_init.z.
+                #   (1) world-z component is restricted to ±goal_pos_z_max_radius,
+                #   (2) overall L2 offset is clamped to goal_pos_max_radius.
+                center = self.object_init_state[env_ids, 0:3].clone()
+                center[:, self.up_axis_idx] -= self.init_goal_down_offset
+                offset = new_pos - center
+                offset[:, self.up_axis_idx] = torch.clamp(
+                    offset[:, self.up_axis_idx],
+                    -self.goal_pos_z_max_radius, self.goal_pos_z_max_radius)
+                offset_norm = offset.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                scale_factor = torch.clamp(self.goal_pos_max_radius / offset_norm, max=1.0)
+                new_pos = center + offset * scale_factor
+            elif base_pos is not None:
+                new_pos = base_pos.clone()
+                new_pos[:, self.up_axis_idx] -= self.init_goal_down_offset
+            else:
+                new_pos = self.goal_init_state[env_ids, 0:3]
+            self.goal_states[env_ids, 0:3] = new_pos
+        else:
+            self.goal_states[env_ids, 0:3] = self.goal_init_state[env_ids, 0:3]
         self.goal_states[env_ids, 3:7] = new_rot
         self.root_state_tensor[self.goal_object_indices[env_ids], 0:3] = self.goal_states[env_ids, 0:3] + self.goal_displacement_tensor
         self.root_state_tensor[self.goal_object_indices[env_ids], 3:7] = self.goal_states[env_ids, 3:7]
@@ -712,18 +764,23 @@ class ShadowHand(VecTask):
         # generate random values
         rand_floats = torch_rand_float(-1.0, 1.0, (len(env_ids), self.num_shadow_hand_dofs * 2 + 5), device=self.device)
 
+        # Pre-compute the randomized object position so reset_target_pose can use
+        # it as the base for the initial goal position when trackGoalPos is on.
+        new_object_pos = self.object_init_state[env_ids, 0:3].clone()
+        new_object_pos[:, 0:2] = self.object_init_state[env_ids, 0:2] + \
+            self.reset_position_noise * rand_floats[:, 0:2]
+        new_object_pos[:, self.up_axis_idx] = self.object_init_state[env_ids, self.up_axis_idx] + \
+            self.reset_position_noise * rand_floats[:, self.up_axis_idx]
+
         # randomize start object poses
-        self.reset_target_pose(env_ids)
+        self.reset_target_pose(env_ids, base_pos=new_object_pos)
 
         # reset rigid body forces
         self.rb_forces[env_ids, :, :] = 0.0
 
         # reset object
         self.root_state_tensor[self.object_indices[env_ids]] = self.object_init_state[env_ids].clone()
-        self.root_state_tensor[self.object_indices[env_ids], 0:2] = self.object_init_state[env_ids, 0:2] + \
-            self.reset_position_noise * rand_floats[:, 0:2]
-        self.root_state_tensor[self.object_indices[env_ids], self.up_axis_idx] = self.object_init_state[env_ids, self.up_axis_idx] + \
-            self.reset_position_noise * rand_floats[:, self.up_axis_idx]
+        self.root_state_tensor[self.object_indices[env_ids], 0:3] = new_object_pos
 
         new_object_rot = randomize_rotation(rand_floats[:, 3], rand_floats[:, 4], self.x_unit_tensor[env_ids], self.y_unit_tensor[env_ids])
         pen_mask = self.is_pen[env_ids]
@@ -865,7 +922,8 @@ def compute_hand_reward(
     obj_linvel_penalty_scale: float, obj_angvel_penalty_scale: float,
     dof_vel_penalty_scale: float, palm_dist_penalty_scale: float,
     obj_linvel_limit: float, obj_angvel_limit: float, dof_vel_limit: float,
-    fall_ref_pos
+    fall_ref_pos,
+    pos_success_tolerance: float
 ):
     # Distance from the hand to the object
     goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
@@ -902,8 +960,15 @@ def compute_hand_reward(
               + dof_vel_penalty * dof_vel_penalty_scale
               + palm_dist_penalty * palm_dist_penalty_scale)
 
+    # Success requires both rotation and position within tolerance. When
+    # pos_success_tolerance is set to a large sentinel (e.g. 1e6), the position
+    # check is always satisfied and behavior reduces to rotation-only.
+    rot_ok = torch.abs(rot_dist) <= success_tolerance
+    pos_ok = goal_dist <= pos_success_tolerance
+    goal_hit = rot_ok & pos_ok
+
     # Find out which envs hit the goal and update successes count
-    goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)
+    goal_resets = torch.where(goal_hit, torch.ones_like(reset_goal_buf), reset_goal_buf)
     successes = successes + goal_resets
 
     # Success bonus: orientation is within `success_tolerance` of goal orientation
@@ -916,7 +981,7 @@ def compute_hand_reward(
     resets = torch.where(fall_check_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
     if max_consecutive_successes > 0:
         # Reset progress buffer on goal envs if max_consecutive_successes > 0
-        progress_buf = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.zeros_like(progress_buf), progress_buf)
+        progress_buf = torch.where(goal_hit, torch.zeros_like(progress_buf), progress_buf)
         resets = torch.where(successes >= max_consecutive_successes, torch.ones_like(resets), resets)
     resets = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(resets), resets)
 
