@@ -62,6 +62,10 @@ env:
     default: [0.8, 1.2]
   observationType: "full_state"
   asymmetric_observations: False
+  # If True, zero-mask obs dims unavailable on a real robot:
+  # per-DOF joint torques, per-fingertip linvel+angvel, fingertip 6-axis F/T sensors.
+  # Obs dim and sensor creation are unchanged; values are blanked before the policy sees them.
+  realWorldObs: False
   successTolerance: 0.3
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0

@@ -180,6 +180,11 @@ class WujiHand(VecTask):
         if self.obs_type != "full_state":
             raise Exception("WujiHand only supports observationType='full_state'")
 
+        # When True, zero-mask obs dims that wouldn't be measurable on a real robot:
+        # per-DOF torque, per-fingertip linvel+angvel, per-fingertip 6-axis F/T sensor.
+        # Obs dim unchanged so existing checkpoints load cleanly.
+        self.realworld_obs = bool(self.cfg["env"].get("realWorldObs", False))
+
         print("Obs type:", self.obs_type)
 
         self.num_wuji_dofs = _WUJI_NUM_DOFS
@@ -241,6 +246,9 @@ class WujiHand(VecTask):
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
         self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(
             self.num_envs, self.num_wuji_dofs)
+
+        if self.realworld_obs:
+            self._realworld_mask_idx = self._build_realworld_mask_idx()
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -637,6 +645,24 @@ class WujiHand(VecTask):
         if self.asymmetric_obs:
             self.compute_full_state(True)
 
+    def _build_realworld_mask_idx(self):
+        n = self.num_wuji_dofs
+        fingertip_obs_start = 3 * n + 13 + 11
+        num_ft_states = 13 * self.num_fingertips
+        num_ft_force_torques = 6 * self.num_fingertips
+
+        torque_idx = list(range(2 * n, 3 * n))
+        ft_vel_idx = []
+        for i in range(self.num_fingertips):
+            base = fingertip_obs_start + i * 13
+            ft_vel_idx.extend(range(base + 7, base + 13))
+        ft_force_idx = list(range(
+            fingertip_obs_start + num_ft_states,
+            fingertip_obs_start + num_ft_states + num_ft_force_torques))
+
+        return torch.tensor(torque_idx + ft_vel_idx + ft_force_idx,
+                            dtype=torch.long, device=self.device)
+
     def compute_full_state(self, asymm_obs=False):
         buf = self.states_buf if asymm_obs else self.obs_buf
         n = self.num_wuji_dofs
@@ -672,6 +698,9 @@ class WujiHand(VecTask):
         if self.append_hand_base_pose and not asymm_obs:
             pose_start = obs_end + self.num_actions
             buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
+
+        if self.realworld_obs:
+            buf[:, self._realworld_mask_idx] = 0.0
 
     def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False):
         n = len(env_ids)

@@ -160,6 +160,12 @@ class ShadowHand(VecTask):
         # Only implemented for full_state; leaves asymmetric states buffer unchanged.
         self.append_hand_base_pose = bool(self.cfg["env"].get("appendHandBasePose", False))
 
+        # When True, zero-mask obs dims that wouldn't be measurable on a real robot:
+        # per-DOF torque, per-fingertip linvel+angvel, per-fingertip 6-axis F/T sensor.
+        # Obs dim unchanged so existing checkpoints load cleanly; mask is applied at the
+        # end of compute_full_state (see _build_realworld_mask_idx).
+        self.realworld_obs = bool(self.cfg["env"].get("realWorldObs", False))
+
         self.up_axis = 'z'
 
         self.fingertips = ["robot0:ffdistal", "robot0:mfdistal", "robot0:rfdistal", "robot0:lfdistal", "robot0:thdistal"]
@@ -208,6 +214,9 @@ class ShadowHand(VecTask):
 
             dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
             self.dof_force_tensor = gymtorch.wrap_tensor(dof_force_tensor).view(self.num_envs, self.num_shadow_hand_dofs)
+
+        if self.realworld_obs:
+            self._realworld_mask_idx = self._build_realworld_mask_idx()
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -630,6 +639,24 @@ class ShadowHand(VecTask):
 
             self.obs_buf[:, 137:157] = self.actions
 
+    def _build_realworld_mask_idx(self):
+        n = self.num_shadow_hand_dofs
+        fingertip_obs_start = 3 * n + 13 + 11
+        num_ft_states = 13 * self.num_fingertips
+        num_ft_force_torques = 6 * self.num_fingertips
+
+        torque_idx = list(range(2 * n, 3 * n))
+        ft_vel_idx = []
+        for i in range(self.num_fingertips):
+            base = fingertip_obs_start + i * 13
+            ft_vel_idx.extend(range(base + 7, base + 13))
+        ft_force_idx = list(range(
+            fingertip_obs_start + num_ft_states,
+            fingertip_obs_start + num_ft_states + num_ft_force_torques))
+
+        return torch.tensor(torque_idx + ft_vel_idx + ft_force_idx,
+                            dtype=torch.long, device=self.device)
+
     def compute_full_state(self, asymm_obs=False):
         if asymm_obs:
             self.states_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
@@ -659,6 +686,9 @@ class ShadowHand(VecTask):
             # obs_total = obs_end + num_actions = 211
             obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
             self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
+
+            if self.realworld_obs:
+                self.states_buf[:, self._realworld_mask_idx] = 0.0
         else:
             self.obs_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
                                                                    self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
@@ -692,6 +722,9 @@ class ShadowHand(VecTask):
                 # hand root pose (pos 3 + quat 4) in world frame, used by SE(3)-preprocess policy
                 pose_start = obs_end + self.num_actions  # 211
                 self.obs_buf[:, pose_start:pose_start + 7] = self.root_state_tensor[self.hand_indices, 0:7]
+
+            if self.realworld_obs:
+                self.obs_buf[:, self._realworld_mask_idx] = 0.0
 
     def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False, base_pos=None):
         n = len(env_ids)

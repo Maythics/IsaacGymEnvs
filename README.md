@@ -108,6 +108,62 @@ you will need to escape them and put quotes around the string. For example,
 `checkpoint="./runs/Ant/nn/last_Antep\=501rew\[5981.31\].pth"`
 
 
+### Fine-tuning a hand policy with real-world-only observations
+
+The `ShadowHand`, `XHandHand`, and `WujiHand` tasks (and their pour / push /
+flip / tilted / door variants, which inherit through their base class) expose a
+`task.env.realWorldObs` flag. When `True`, observation dimensions that are not
+measurable on a physical robot are zero-masked before the policy sees them:
+
+- per-DOF joint torques (no joint-torque sensing in deployment)
+- per-fingertip linear + angular velocity (we trust only FK pose; Jacobian×qdot
+  is too noisy)
+- per-fingertip 6-axis force/torque sensor readings
+
+Observation dim, sensor creation, reward, and reset logic are unchanged — only
+the obs buffer at the masked indices is zeroed. This lets an existing
+`full_state` checkpoint load with `strict=True` and be fine-tuned to operate
+without those signals.
+
+#### 1. Patch the saved input-normalization stats
+
+The saved `running_mean_std` was fit on the *full* obs distribution. After
+masking, the obs is literally zero at those dims, so the saved mean/var would
+push large negative values into the network for the first few thousand steps.
+Patch the checkpoint once to reset masked dims to (mean=0, var=1):
+
+```bash
+python -m isaacgymenvs.utils.patch_checkpoint_realworld \
+    --task ShadowHand \
+    --in  runs/ShadowHand/nn/ShadowHand.pth \
+    --out runs/ShadowHand/nn/ShadowHand_realworld.pth
+```
+
+Supported `--task` values: `ShadowHand`, `XHandHand`, `WujiHand`. If `--out`
+is omitted the patched file is written next to the input with a `_realworld`
+suffix. All other state (policy/value weights, optimizer, epoch, value-norm)
+is preserved.
+
+#### 2. Fine-tune from the patched checkpoint
+
+Lower the learning rate ~5× vs. train-from-scratch to keep catastrophic
+forgetting in check while the policy adapts to the masked input distribution:
+
+```bash
+cd isaacgymenvs
+python train.py task=ShadowHand \
+    checkpoint=runs/ShadowHand/nn/ShadowHand_realworld.pth \
+    task.env.realWorldObs=True \
+    experiment=ShadowHand_realworld_ft \
+    train.params.config.learning_rate=1e-4
+```
+
+Same template works for `task=XHandHand` and `task=WujiHand` and their
+variants. To sanity-check that nothing is broken on the default code path, run
+the original checkpoint with `task.env.realWorldObs=False` (the default) — it
+should reproduce the original eval reward.
+
+
 ### Configuration and command line arguments
 
 We use [Hydra](https://hydra.cc/docs/intro/) to manage the config. Note that this has some 
