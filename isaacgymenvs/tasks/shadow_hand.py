@@ -99,6 +99,7 @@ class ShadowHand(VecTask):
         self.use_relative_control = self.cfg["env"]["useRelativeControl"]
         self.act_moving_average = self.cfg["env"]["actionsMovingAverage"]
         self.action_speed_scale = self.cfg["env"].get("actionSpeedScale", 1.0)
+        self.stiffness_scale = self.cfg["env"].get("stiffnessScale", 1.0)
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -337,6 +338,10 @@ class ShadowHand(VecTask):
             [int(self.actuated_dof_indices[0]), int(self.actuated_dof_indices[1])],
             self.wrist_action_clip,
         )
+
+        # Soften the PD position drive (lower Kp) to smooth contact transients,
+        # especially at the reduced 10 Hz control rate. 1.0 = unchanged.
+        shadow_hand_dof_props['stiffness'] *= self.stiffness_scale
 
         self.shadow_hand_dof_lower_limits = []
         self.shadow_hand_dof_upper_limits = []
