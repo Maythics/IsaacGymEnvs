@@ -36,7 +36,7 @@ env:
   obsNoise: 0.0                # env-level extra noise; DR `observations` block below is primary
 
   # ── external object disturbance (A.5.5, rollout) ──
-  forceScale: 0.25             # N, single-step impulse
+  forceScale: 0.2             # N, single-step impulse
   torqueScale: 0.00375         # N·m
   forceProbRange: [0.6, 1.8]   # seconds between disturbances
 
