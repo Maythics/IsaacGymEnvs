@@ -21,7 +21,7 @@ env:
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
   actionSpeedScale: 1.0  # multiplier on finger movement speed (1.0 = normal, 0.5 = half speed)
-  controlFrequencyInv: 1 # 1 is for 60 Hz
+  controlFrequencyInv: 6 # 1 is for 60 Hz
 
   startPositionNoise: 0.01
   startRotationNoise: 0.0
