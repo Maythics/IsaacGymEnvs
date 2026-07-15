@@ -12,14 +12,14 @@ env:
   clipObservations: 5.0
   clipActions: 1.0
 
-  stiffnessScale: 1.0
+  stiffnessScale: 0.4
   forceLimitScale: 1.0
 
   useRelativeControl: False
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
   actionSpeedScale: 1.0
-  controlFrequencyInv: 1 # 60 Hz
+  controlFrequencyInv: 6 # 10 Hz
 
   startPositionNoise: 0.01
   startRotationNoise: 0.0
@@ -66,7 +66,7 @@ env:
   # per-DOF joint torques, per-fingertip linvel+angvel, fingertip 6-axis F/T sensors.
   # Obs dim and sensor creation are unchanged; values are blanked before the policy sees them.
   realWorldObs: False
-  successTolerance: 0.3
+  successTolerance: 0.4
   printNumSuccesses: False
   maxConsecutiveSuccesses: 0
 
@@ -76,6 +76,16 @@ env:
   goalRotDeltaDegMin: 20.0
   goalRotDeltaDegMax: 30.0
 
+  # Track goal position in addition to orientation. When True, success requires
+  # both rot_dist <= successTolerance AND ||object_pos - goal_pos|| <= posSuccessTolerance.
+  trackGoalPos: True
+  posSuccessTolerance: 0.04
+  goalPosDeltaMin: 0.01
+  goalPosDeltaMax: 0.02
+  goalPosMaxRadius: 0.044
+  goalPosZMaxRadius: 0.04
+  initGoalDownOffset: 0.08
+
   asset:
     assetFileNameBlock: "urdf/objects/cube_multicolor.urdf"
     assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
@@ -84,7 +94,7 @@ env:
   # When < 1.0, clamps the first 2 action dims (WRJ2 / WRJ1) to [-c, +c] before
   # they reach the env. 0.05 effectively freezes the wrist (matches ShadowHand
   # default behavior for in-hand reorient). Set to 1.0 to allow free wrist motion.
-  wristActionClip: 0.05
+  wristActionClip: 0.001
 
   enableCameraSensors: False
 
