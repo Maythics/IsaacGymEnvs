@@ -139,8 +139,12 @@ class XHandHand(VecTask):
         # wristActionClip: when < 1.0, clamps the first 2 action dims (wrist)
         # to [-c, +c] and shrinks the URDF wrist joint range to a matching
         # symmetric window around the original midpoint so PhysX enforces
-        # the bound as a hard physical stop.
+        # the bound as a hard physical stop. Ignored by freezeWrist mode.
         self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
+        # Keep the legacy wrist action slots in the policy interface, but make
+        # them no-ops. This preserves old observation/action dimensions so old
+        # checkpoints can resume without a state-dict adapter.
+        self.freeze_wrist = bool(self.cfg["env"].get("freezeWrist", False))
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -364,8 +368,21 @@ class XHandHand(VecTask):
             xhand_dof_props['stiffness'][i] = 2.0
             xhand_dof_props['damping'][i] = 0.1
 
-        # Hard physical wrist limit: wrist DOFs are at indices 0/1.
-        shrink_dof_limits_inplace(xhand_dof_props, [0, 1], self.wrist_action_clip)
+        # Preserve the original ranges for finite observation normalization,
+        # even when the physical wrist limits are locked effectively at 0 rad.
+        original_wrist_lower = [float(xhand_dof_props['lower'][i]) for i in range(2)]
+        original_wrist_upper = [float(xhand_dof_props['upper'][i]) for i in range(2)]
+        if self.freeze_wrist:
+            for i in range(2):
+                # A tiny nonzero interval keeps PhysX's joint-limit solver
+                # active; equal lower/upper values may be treated as unlocked.
+                xhand_dof_props['lower'][i] = -1.0e-6
+                xhand_dof_props['upper'][i] = 1.0e-6
+                xhand_dof_props['stiffness'][i] = 1000.0
+                xhand_dof_props['damping'][i] = 100.0
+                xhand_dof_props['effort'][i] = 1000.0
+        else:
+            shrink_dof_limits_inplace(xhand_dof_props, [0, 1], self.wrist_action_clip)
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
@@ -376,8 +393,12 @@ class XHandHand(VecTask):
         self.xhand_dof_default_pos = []
         self.xhand_dof_default_vel = []
         for i in range(self.num_xhand_dofs):
-            self.xhand_dof_lower_limits.append(xhand_dof_props['lower'][i])
-            self.xhand_dof_upper_limits.append(xhand_dof_props['upper'][i])
+            if self.freeze_wrist and i < 2:
+                self.xhand_dof_lower_limits.append(original_wrist_lower[i])
+                self.xhand_dof_upper_limits.append(original_wrist_upper[i])
+            else:
+                self.xhand_dof_lower_limits.append(xhand_dof_props['lower'][i])
+                self.xhand_dof_upper_limits.append(xhand_dof_props['upper'][i])
             self.xhand_dof_default_pos.append(0.0)
             self.xhand_dof_default_vel.append(0.0)
 
@@ -385,6 +406,11 @@ class XHandHand(VecTask):
         self.xhand_dof_upper_limits = to_torch(self.xhand_dof_upper_limits, device=self.device)
         self.xhand_dof_default_pos = to_torch(self.xhand_dof_default_pos, device=self.device)
         self.xhand_dof_default_vel = to_torch(self.xhand_dof_default_vel, device=self.device)
+
+        # In frozen mode the actual wrist joint targets are held at 0 rad.
+        self.wrist_target_pos = torch.zeros(2, dtype=torch.float, device=self.device)
+        if self.freeze_wrist:
+            self.xhand_dof_default_pos[:2] = self.wrist_target_pos
 
         # Fingertip rigid-body indices
         self.fingertip_handles = [
@@ -809,11 +835,15 @@ class XHandHand(VecTask):
             rand_floats[:, 5:5 + self.num_xhand_dofs] + 1)
 
         pos = self.xhand_default_dof_pos + self.reset_dof_pos_noise * rand_delta
+        if self.freeze_wrist:
+            pos[:, :2] = self.wrist_target_pos
         self.xhand_dof_pos[env_ids, :] = pos
         self.xhand_dof_vel[env_ids, :] = (
             self.xhand_dof_default_vel
             + self.reset_dof_vel_noise
             * rand_floats[:, 5 + self.num_xhand_dofs:5 + self.num_xhand_dofs * 2])
+        if self.freeze_wrist:
+            self.xhand_dof_vel[env_ids, :2] = 0.0
         self.prev_targets[env_ids, :self.num_xhand_dofs] = pos
         self.cur_targets[env_ids, :self.num_xhand_dofs] = pos
 
@@ -844,7 +874,11 @@ class XHandHand(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
-        if self.wrist_action_clip < 1.0:
+        if self.freeze_wrist:
+            # Keep the two legacy wrist action dimensions for checkpoint
+            # compatibility, but remove them from exploration and rewards.
+            self.actions[:, :2] = 0.0
+        elif self.wrist_action_clip < 1.0:
             # First two action dims correspond to the wrist DOFs.
             self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
@@ -870,6 +904,11 @@ class XHandHand(VecTask):
                 self.xhand_dof_lower_limits[self.actuated_dof_indices],
                 self.xhand_dof_upper_limits[self.actuated_dof_indices])
 
+        if self.freeze_wrist:
+            # Set explicitly in both control modes so the actual wrist joint
+            # targets remain at zero, even if a caller supplies legacy actions.
+            self.cur_targets[:, :2] = self.wrist_target_pos
+
         self.prev_targets[:, self.actuated_dof_indices] = \
             self.cur_targets[:, self.actuated_dof_indices]
         self.gym.set_dof_position_target_tensor(
@@ -889,6 +928,16 @@ class XHandHand(VecTask):
     def post_physics_step(self):
         self.progress_buf += 1
         self.randomize_buf += 1
+
+        if self.freeze_wrist:
+            # A contact can numerically deflect even a tightly locked PhysX
+            # joint. Re-apply the exact zero state at the control boundary so
+            # wrist deflection is never exposed to the policy or carried into
+            # the next simulation interval.
+            self.xhand_dof_pos[:, :2] = 0.0
+            self.xhand_dof_vel[:, :2] = 0.0
+            self.gym.set_dof_state_tensor(
+                self.sim, gymtorch.unwrap_tensor(self.dof_state))
 
         self.compute_observations()
         self.compute_reward(self.actions)

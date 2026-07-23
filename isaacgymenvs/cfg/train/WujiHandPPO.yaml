@@ -5,7 +5,7 @@ params:
     name: a2c_continuous
 
   model:
-    name: continuous_a2c_logstd
+    name: continuous_a2c_logstd_frozen_wrist
 
   network:
     name: actor_critic

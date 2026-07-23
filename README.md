@@ -163,6 +163,19 @@ variants. To sanity-check that nothing is broken on the default code path, run
 the original checkpoint with `task.env.realWorldObs=False` (the default) — it
 should reproduce the original eval reward.
 
+### Frozen wrist exploration for WujiHand and XHandHand
+
+`WujiHand` and `XHandHand` keep their legacy 22- and 14-dimensional action
+interfaces so existing checkpoints load directly, but their first two wrist
+entries are deterministic zeros. PPO likelihood and entropy use only the 20
+Wuji or 12 XHand finger actions, and the environment resets and holds both wrist
+joint targets at 0 rad. Resume normally with the existing checkpoint command; no
+checkpoint conversion is needed. Set `task.env.freezeWrist=False` to restore the
+legacy environment behavior (and `task.env.wristActionClip=0.001` to reproduce
+the previous clip), and set
+`train.params.model.name=continuous_a2c_logstd` as well if the wrist outputs
+should be explored again.
+
 
 ### Configuration and command line arguments
 

@@ -91,10 +91,11 @@ env:
     assetFileNameEgg: "mjcf/open_ai_assets/hand/egg.xml"
     assetFileNamePen: "mjcf/open_ai_assets/hand/pen.xml"
 
-  # When < 1.0, clamps the first 2 action dims (WRJ2 / WRJ1) to [-c, +c] before
-  # they reach the env. 0.05 effectively freezes the wrist (matches ShadowHand
-  # default behavior for in-hand reorient). Set to 1.0 to allow free wrist motion.
-  wristActionClip: 0.001
+  # Legacy wrist clip, ignored while freezeWrist is True.
+  wristActionClip: 1.0
+  # Keep the two legacy wrist action/observation slots so old checkpoints load,
+  # but zero their effective commands and hold the actual joint targets at 0 rad.
+  freezeWrist: True
 
   enableCameraSensors: False
 

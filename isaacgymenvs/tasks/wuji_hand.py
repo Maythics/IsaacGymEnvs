@@ -138,8 +138,12 @@ class WujiHand(VecTask):
         self.action_speed_scale = self.cfg["env"].get("actionSpeedScale", 1.0)
 
         # wristActionClip: when < 1.0, clamps the first 2 action dims (WRJ2/WRJ1)
-        # to [-c, +c] before they reach the env. Mirrors ShadowHand:790-794.
+        # to [-c, +c] before they reach the env. Ignored by freezeWrist mode.
         self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
+        # Keep the legacy wrist action slots in the policy interface, but make
+        # them no-ops. This preserves old observation/action dimensions so old
+        # checkpoints can resume without a state-dict adapter.
+        self.freeze_wrist = bool(self.cfg["env"].get("freezeWrist", False))
 
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
@@ -374,11 +378,21 @@ class WujiHand(VecTask):
                 wuji_dof_props['stiffness'][i] = 2.0
                 wuji_dof_props['damping'][i] = 0.1
 
-        # Hard physical wrist limit: when wristActionClip < 1.0, tighten the
-        # URDF joint range on the wrist DOFs so PhysX enforces it as a stop
-        # regardless of contact forces. The action-side clamp in
-        # pre_physics_step keeps the commanded target consistent with this.
-        shrink_dof_limits_inplace(wuji_dof_props, [0, 1], self.wrist_action_clip)
+        # Preserve the original ranges for finite observation normalization,
+        # even when the physical wrist limits are locked effectively at 0 rad.
+        original_wrist_lower = [float(wuji_dof_props['lower'][i]) for i in range(2)]
+        original_wrist_upper = [float(wuji_dof_props['upper'][i]) for i in range(2)]
+        if self.freeze_wrist:
+            for i in range(2):
+                # A tiny nonzero interval keeps PhysX's joint-limit solver
+                # active; equal lower/upper values may be treated as unlocked.
+                wuji_dof_props['lower'][i] = -1.0e-6
+                wuji_dof_props['upper'][i] = 1.0e-6
+                wuji_dof_props['stiffness'][i] = 1000.0
+                wuji_dof_props['damping'][i] = 100.0
+                wuji_dof_props['effort'][i] = 1000.0
+        else:
+            shrink_dof_limits_inplace(wuji_dof_props, [0, 1], self.wrist_action_clip)
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
@@ -389,8 +403,12 @@ class WujiHand(VecTask):
         self.wuji_dof_default_pos = []
         self.wuji_dof_default_vel = []
         for i in range(self.num_wuji_dofs):
-            self.wuji_dof_lower_limits.append(wuji_dof_props['lower'][i])
-            self.wuji_dof_upper_limits.append(wuji_dof_props['upper'][i])
+            if self.freeze_wrist and i < 2:
+                self.wuji_dof_lower_limits.append(original_wrist_lower[i])
+                self.wuji_dof_upper_limits.append(original_wrist_upper[i])
+            else:
+                self.wuji_dof_lower_limits.append(wuji_dof_props['lower'][i])
+                self.wuji_dof_upper_limits.append(wuji_dof_props['upper'][i])
             self.wuji_dof_default_pos.append(0.0)
             self.wuji_dof_default_vel.append(0.0)
 
@@ -398,6 +416,11 @@ class WujiHand(VecTask):
         self.wuji_dof_upper_limits = to_torch(self.wuji_dof_upper_limits, device=self.device)
         self.wuji_dof_default_pos = to_torch(self.wuji_dof_default_pos, device=self.device)
         self.wuji_dof_default_vel = to_torch(self.wuji_dof_default_vel, device=self.device)
+
+        # In frozen mode the actual wrist joint targets are held at 0 rad.
+        self.wrist_target_pos = torch.zeros(2, dtype=torch.float, device=self.device)
+        if self.freeze_wrist:
+            self.wuji_dof_default_pos[:2] = self.wrist_target_pos
 
         # Fingertip rigid-body indices
         self.fingertip_handles = [
@@ -839,11 +862,15 @@ class WujiHand(VecTask):
             rand_floats[:, 5:5 + self.num_wuji_dofs] + 1)
 
         pos = self.wuji_default_dof_pos + self.reset_dof_pos_noise * rand_delta
+        if self.freeze_wrist:
+            pos[:, :2] = self.wrist_target_pos
         self.wuji_dof_pos[env_ids, :] = pos
         self.wuji_dof_vel[env_ids, :] = (
             self.wuji_dof_default_vel
             + self.reset_dof_vel_noise
             * rand_floats[:, 5 + self.num_wuji_dofs:5 + self.num_wuji_dofs * 2])
+        if self.freeze_wrist:
+            self.wuji_dof_vel[env_ids, :2] = 0.0
         self.prev_targets[env_ids, :self.num_wuji_dofs] = pos
         self.cur_targets[env_ids, :self.num_wuji_dofs] = pos
 
@@ -874,7 +901,11 @@ class WujiHand(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
-        if self.wrist_action_clip < 1.0:
+        if self.freeze_wrist:
+            # Keep the two legacy wrist action dimensions for checkpoint
+            # compatibility, but remove them from exploration and rewards.
+            self.actions[:, :2] = 0.0
+        elif self.wrist_action_clip < 1.0:
             # First two action dims correspond to WRJ2 / WRJ1 (wrist).
             self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
@@ -900,6 +931,11 @@ class WujiHand(VecTask):
                 self.wuji_dof_lower_limits[self.actuated_dof_indices],
                 self.wuji_dof_upper_limits[self.actuated_dof_indices])
 
+        if self.freeze_wrist:
+            # Set explicitly in both control modes so the actual wrist joint
+            # targets remain at zero, even if a caller supplies legacy actions.
+            self.cur_targets[:, :2] = self.wrist_target_pos
+
         self.prev_targets[:, self.actuated_dof_indices] = \
             self.cur_targets[:, self.actuated_dof_indices]
         self.gym.set_dof_position_target_tensor(
@@ -919,6 +955,16 @@ class WujiHand(VecTask):
     def post_physics_step(self):
         self.progress_buf += 1
         self.randomize_buf += 1
+
+        if self.freeze_wrist:
+            # A contact can numerically deflect even a tightly locked PhysX
+            # joint. Re-apply the exact zero state at the control boundary so
+            # wrist deflection is never exposed to the policy or carried into
+            # the next simulation interval.
+            self.wuji_dof_pos[:, :2] = 0.0
+            self.wuji_dof_vel[:, :2] = 0.0
+            self.gym.set_dof_state_tensor(
+                self.sim, gymtorch.unwrap_tensor(self.dof_state))
 
         self.compute_observations()
         self.compute_reward(self.actions)

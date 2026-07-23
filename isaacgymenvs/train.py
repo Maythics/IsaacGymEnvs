@@ -99,6 +99,7 @@ def launch_rlg_hydra(cfg: DictConfig):
     from isaacgymenvs.learning import amp_network_builder
     from isaacgymenvs.learning import se3_network_builder
     from isaacgymenvs.learning import wuji_se3_network_builder
+    from isaacgymenvs.learning import frozen_wrist_model
     import isaacgymenvs
 
 
@@ -199,6 +200,13 @@ def launch_rlg_hydra(cfg: DictConfig):
         # Wuji SE(3) variant: same idea but with Wuji's 207-dim obs layout.
         model_builder.register_model('continuous_a2c_logstd_se3_wuji', lambda network, **kwargs : wuji_se3_network_builder.WujiSE3ModelA2CContinuousLogStd(network))
         model_builder.register_network('se3_actor_critic_wuji', lambda **kwargs : wuji_se3_network_builder.WujiSE3Builder())
+
+        # Keep the legacy wrist output slots for checkpoint compatibility, but
+        # exclude them from PPO sampling/likelihood/entropy in the frozen-wrist
+        # WujiHand and XHandHand tasks.
+        model_builder.register_model(
+            'continuous_a2c_logstd_frozen_wrist',
+            lambda network, **kwargs: frozen_wrist_model.FrozenWristModelA2CContinuousLogStd(network))
 
         return runner
 

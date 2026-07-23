@@ -6,10 +6,16 @@ Two tasks are available for the XHand robot:
 
 | Task | Description | Obs dims | Action dims |
 |---|---|---|---|
-| `XHandHand` | In-hand reorientation (match goal rotation) | 175 | 14 |
+| `XHandHand` | In-hand reorientation (match goal rotation) | 175 | 14 (12 explored) |
 | `XHandPush` | In-hand repositioning (push along trajectory) | 175 | 14 |
 
 The XHand has **14 actuated DOFs**: 2 wrist (WRJ2 radial/ulnar + WRJ1 flexion/extension) + 3 thumb + 3 index + 2 middle + 2 ring + 2 pinky.
+
+`XHandHand` retains all 14 action entries for direct compatibility with old
+checkpoints, but fixes the first two wrist entries to zero and excludes them
+from PPO exploration. The wrist joint targets are held at 0 rad, and the 12
+finger actions remain active. `XHandPush` keeps the original 14-active-action
+behavior.
 
 ---
 
