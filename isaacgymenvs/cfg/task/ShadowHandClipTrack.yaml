@@ -1,0 +1,144 @@
+# ShadowHandClipTrack — reference-clip tracking controller (TopoRetarget §4 / A.5)
+name: ShadowHandClipTrack
+
+physics_engine: ${..physics_engine}
+
+env:
+  numEnvs: ${resolve_default:4096,${...num_envs}}
+  envSpacing: 0.5
+  episodeLength: 400            # 20 s @ 20 Hz control
+  enableDebugVis: False
+  aggregateMode: 1
+
+  clipObservations: 5.0
+  clipActions: 1.0
+
+  # ── explicit frequency block (recorded end-to-end; sim dt & decimation derived) ──
+  controlFreq: 20              # policy rate (Hz) — MUST equal the reference .npz target_freq
+  simFreq: 100                 # physics rate (Hz) → decimation = simFreq/controlFreq = 5
+
+  # ── reference clip file (produced by scripts/make_track_reference.py) ──
+  referenceFile: "outputs/track_refs/block_train.npz"
+  objectAsset: "urdf/objects/cube_multicolor.urdf"
+
+  # ── control ──
+  actionScale: 0.3             # residual scale on reference finger joints (rad)
+  stiffnessScale: 1.0          # multiplies MJCF Kp
+  axisPointLen: 0.04           # object axis-point half-length (m)
+  lookahead: [1, 3, 5]         # reference lookahead offsets (control steps)
+
+  # ── reference-state-init reset noise (A.5.3) ──
+  resetDofNoise: 0.02          # rad on finger joints
+  resetObjPosNoise: 0.005      # m
+  resetObjRotNoiseDeg: 1.7     # ~0.03 rad axis-angle
+
+  # ── observation noise (A.5.5, step obs) ──
+  obsNoise: 0.0                # env-level extra noise; DR `observations` block below is primary
+
+  # ── external object disturbance (A.5.5, rollout) ──
+  forceScale: 0.2             # N, single-step impulse
+  torqueScale: 0.00375         # N·m
+  forceProbRange: [0.6, 1.8]   # seconds between disturbances
+
+  # ── reward (Table 4) ──
+  reward:
+    wObj: 8.0
+    sigmaObj: 0.04
+    wLink: 1.0
+    sigmaLink: 0.025
+    wJoint: 1.0
+    sigmaJoint: 0.1
+    wSmooth: -0.01
+
+  # ── termination (Table 4) ──
+  termination:
+    objPosErr: 0.05            # m
+    objRotErrDeg: 45.0
+    axisPointErr: 0.05         # m (any of 6 axis points)
+    objLinvel: 10.0            # m/s
+    objAngvel: 500.0           # rad/s
+
+  asset:
+    assetFileName: "mjcf/open_ai_assets/hand/shadow_hand.xml"
+
+  enableCameraSensors: False
+
+task:
+  randomize: True
+  randomization_params:
+    frequency: 600
+    observations:
+      range: [0, 0.002]          # joint-pos obs noise ~N(0,0.02); axis-point ~N(0,0.002)
+      range_correlated: [0, 0.001]
+      operation: "additive"
+      distribution: "gaussian"
+    actions:
+      range: [0., 0.02]
+      range_correlated: [0, 0.01]
+      operation: "additive"
+      distribution: "gaussian"
+    actor_params:
+      hand:
+        dof_properties:
+          damping:
+            range: [0.3, 3.0]
+            operation: "scaling"
+            distribution: "loguniform"
+          stiffness:
+            range: [0.75, 1.5]
+            operation: "scaling"
+            distribution: "loguniform"
+          lower:
+            range: [-0.01, 0.01]
+            operation: "additive"
+            distribution: "gaussian"
+          upper:
+            range: [-0.01, 0.01]
+            operation: "additive"
+            distribution: "gaussian"
+        rigid_body_properties:
+          mass:
+            range: [0.4, 1.5]
+            operation: "scaling"
+            distribution: "uniform"
+            setup_only: True
+        rigid_shape_properties:
+          friction:
+            num_buckets: 250
+            range: [0.7, 1.3]
+            operation: "scaling"
+            distribution: "uniform"
+      object:
+        rigid_body_properties:
+          mass:
+            range: [0.4, 1.6]
+            operation: "scaling"
+            distribution: "uniform"
+            setup_only: True
+        rigid_shape_properties:
+          friction:
+            num_buckets: 250
+            range: [0.7, 1.3]
+            operation: "scaling"
+            distribution: "uniform"
+
+sim:
+  dt: 0.01                      # overwritten in task __init__ from simFreq (1/100)
+  substeps: 2
+  up_axis: "z"
+  use_gpu_pipeline: ${eq:${...pipeline},"gpu"}
+  gravity: [0.0, 0.0, -9.81]
+  physx:
+    num_threads: ${....num_threads}
+    solver_type: ${....solver_type}
+    use_gpu: ${contains:"cuda",${....sim_device}}
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    max_gpu_contact_pairs: 8388608
+    num_subscenes: ${....num_subscenes}
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+    contact_collection: 0
