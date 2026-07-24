@@ -14,13 +14,13 @@ env:
   clipObservations: 5.0
   clipActions: 1.0
 
-  stiffnessScale: 0.4   # multiplies MJCF Kp (1.0 = unchanged); <1 softens contact
+  stiffnessScale: 1.0   # multiplies MJCF Kp (1.0 = unchanged); <1 softens contact
   forceLimitScale: 1.0
 
   useRelativeControl: False
   dofSpeedScale: 20.0
   actionsMovingAverage: 1.0
-  actionSpeedScale: 1.0  # multiplier on finger movement speed (1.0 = normal, 0.5 = half speed)
+  actionSpeedScale: 0.4  # multiplier on finger movement speed (1.0 = normal, 0.5 = half speed)
   controlFrequencyInv: 6 # 1 is for 60 Hz
 
   startPositionNoise: 0.01

@@ -956,16 +956,8 @@ class WujiHand(VecTask):
         self.progress_buf += 1
         self.randomize_buf += 1
 
-        if self.freeze_wrist:
-            # A contact can numerically deflect even a tightly locked PhysX
-            # joint. Re-apply the exact zero state at the control boundary so
-            # wrist deflection is never exposed to the policy or carried into
-            # the next simulation interval.
-            self.wuji_dof_pos[:, :2] = 0.0
-            self.wuji_dof_vel[:, :2] = 0.0
-            self.gym.set_dof_state_tensor(
-                self.sim, gymtorch.unwrap_tensor(self.dof_state))
-
+        # Hold the wrist through its target and physical limits only. The DOF
+        # tensor is stale until compute_observations refreshes it after physics.
         self.compute_observations()
         self.compute_reward(self.actions)
 
