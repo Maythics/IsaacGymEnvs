@@ -1,0 +1,14 @@
+# ShadowHand reorientation with both wrist joints physically held at 0 rad and
+# removed from the policy interface. The policy controls only 18 finger actions.
+defaults:
+  - ShadowHand
+  - _self_
+
+name: Shadowhand18
+
+env:
+  freezeWrist: True
+  reduceWristActions: True
+  # Ignored in frozen mode; kept explicit to avoid inheriting the legacy
+  # near-zero wrist clip as the apparent source of the constraint.
+  wristActionClip: 1.0

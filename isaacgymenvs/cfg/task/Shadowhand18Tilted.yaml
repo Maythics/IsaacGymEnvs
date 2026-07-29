@@ -1,0 +1,23 @@
+# Shadowhand18 with a fixed, globally tilted base for checkpoint-compatible
+# staged fine-tuning. The policy interface remains 209 observations / 18 actions.
+defaults:
+  - Shadowhand18
+  - _self_
+
+name: Shadowhand18Tilted
+
+env:
+  # World-frame axis-angle tilt, applied once at every environment reset.
+  # Positive angles follow the right-hand rule. Override this per curriculum stage,
+  # e.g. task.env.baseTiltAngleDeg=15.
+  baseTiltAngleDeg: 0.0
+  baseTiltAxis: [0.0, 1.0, 0.0]
+
+  # Additional palm-local object translation (meters), on top of the calibrated
+  # legacy ShadowHand spawn offset. Adjust this to lower/shift the object after
+  # inspecting a tilted reset, without changing source code.
+  objectPalmOffset: [0.0, 0.0, 0.0]
+
+  # Initial and follow-up goal sampling is expressed in the same fixed palm
+  # frame. Legacy *Z* limits preserve their zero-tilt meaning, then rotate with
+  # the hand at nonzero baseTiltAngleDeg.

@@ -73,6 +73,11 @@ class ShadowHand(VecTask):
         self.init_goal_down_offset = float(self.cfg["env"].get("initGoalDownOffset", 0.04))
 
         self.wrist_action_clip = float(self.cfg["env"].get("wristActionClip", 1.0))
+        self.freeze_wrist = bool(self.cfg["env"].get("freezeWrist", False))
+        self.reduce_wrist_actions = bool(self.cfg["env"].get("reduceWristActions", False))
+        if self.reduce_wrist_actions and not self.freeze_wrist:
+            raise ValueError("reduceWristActions requires freezeWrist=True")
+        self.num_policy_actions = 18 if self.reduce_wrist_actions else 20
 
         self.vel_obs_scale = 0.2  # scale factor of velocity based observations
         self.force_torque_obs_scale = 10.0  # scale factor of velocity based observations
@@ -149,11 +154,14 @@ class ShadowHand(VecTask):
 
         print("Obs type:", self.obs_type)
 
+        # Every observation layout ends with the previous policy action. Keep
+        # the physical 24-DOF hand state intact, but shrink that trailing block
+        # for the true 18-action frozen-wrist task.
         self.num_obs_dict = {
-            "openai": 42,
-            "full_no_vel": 77,
-            "full": 157,
-            "full_state": 211
+            "openai": 22 + self.num_policy_actions,
+            "full_no_vel": 57 + self.num_policy_actions,
+            "full": 137 + self.num_policy_actions,
+            "full_state": 191 + self.num_policy_actions,
         }
 
         # When True, append hand root pose (pos 3 + quat 4) to the end of the observation.
@@ -178,7 +186,7 @@ class ShadowHand(VecTask):
 
         num_states = 0
         if self.asymmetric_obs:
-            num_states = 211
+            num_states = 191 + self.num_policy_actions
 
         num_obs = self.num_obs_dict[self.obs_type]
         if self.append_hand_base_pose:
@@ -188,7 +196,7 @@ class ShadowHand(VecTask):
 
         self.cfg["env"]["numObservations"] = num_obs
         self.cfg["env"]["numStates"] = num_states
-        self.cfg["env"]["numActions"] = 20
+        self.cfg["env"]["numActions"] = self.num_policy_actions
 
         super().__init__(config=self.cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
 
@@ -325,23 +333,44 @@ class ShadowHand(VecTask):
         self.gym.set_asset_tendon_properties(shadow_hand_asset, tendon_props)
 
         actuated_dof_names = [self.gym.get_asset_actuator_joint_name(shadow_hand_asset, i) for i in range(self.num_shadow_hand_actuators)]
+        if self.freeze_wrist and actuated_dof_names[:2] != ["robot0:WRJ1", "robot0:WRJ0"]:
+            raise RuntimeError(
+                "ShadowHand frozen-wrist mode expects WRJ1/WRJ0 to be the first two actuators; "
+                f"got {actuated_dof_names[:2]}")
         self.actuated_dof_indices = [self.gym.find_asset_dof_index(shadow_hand_asset, name) for name in actuated_dof_names]
 
         # get shadow_hand dof properties, loaded by Isaac Gym from the MJCF file
         shadow_hand_dof_props = self.gym.get_asset_dof_properties(shadow_hand_asset)
 
-        # Hard physical wrist limit: when wristActionClip < 1.0, tighten the
-        # joint range on the wrist DOFs (first two actuators -> WRJ1/WRJ0)
-        # so PhysX enforces it as a stop regardless of contact forces.
-        shrink_dof_limits_inplace(
-            shadow_hand_dof_props,
-            [int(self.actuated_dof_indices[0]), int(self.actuated_dof_indices[1])],
-            self.wrist_action_clip,
-        )
-
         # Soften the PD position drive (lower Kp) to smooth contact transients,
         # especially at the reduced 10 Hz control rate. 1.0 = unchanged.
         shadow_hand_dof_props['stiffness'] *= self.stiffness_scale
+
+        wrist_dof_indices = [int(self.actuated_dof_indices[0]), int(self.actuated_dof_indices[1])]
+        original_wrist_limits = {
+            i: (float(shadow_hand_dof_props['lower'][i]),
+                float(shadow_hand_dof_props['upper'][i]))
+            for i in wrist_dof_indices
+        }
+        if self.freeze_wrist:
+            for i in wrist_dof_indices:
+                # Equal limits may be interpreted as an unlocked joint by
+                # PhysX. A one-microradian interval acts as a physical stop at
+                # zero while keeping the position drive active.
+                shadow_hand_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
+                shadow_hand_dof_props['lower'][i] = -1.0e-6
+                shadow_hand_dof_props['upper'][i] = 1.0e-6
+                shadow_hand_dof_props['stiffness'][i] = 1000.0
+                shadow_hand_dof_props['damping'][i] = 100.0
+                shadow_hand_dof_props['effort'][i] = 1000.0
+        else:
+            # Legacy ShadowHand behavior: clip the first two policy actions and
+            # tighten their physical range by the same fraction.
+            shrink_dof_limits_inplace(
+                shadow_hand_dof_props,
+                wrist_dof_indices,
+                self.wrist_action_clip,
+            )
 
         self.shadow_hand_dof_lower_limits = []
         self.shadow_hand_dof_upper_limits = []
@@ -349,16 +378,29 @@ class ShadowHand(VecTask):
         self.shadow_hand_dof_default_vel = []
 
         for i in range(self.num_shadow_hand_dofs):
-            self.shadow_hand_dof_lower_limits.append(shadow_hand_dof_props['lower'][i])
-            self.shadow_hand_dof_upper_limits.append(shadow_hand_dof_props['upper'][i])
+            if self.freeze_wrist and i in original_wrist_limits:
+                # Normalize the constant zero wrist observation with the
+                # original finite range, not the microradian physical stop.
+                norm_lower, norm_upper = original_wrist_limits[i]
+                self.shadow_hand_dof_lower_limits.append(norm_lower)
+                self.shadow_hand_dof_upper_limits.append(norm_upper)
+            else:
+                self.shadow_hand_dof_lower_limits.append(shadow_hand_dof_props['lower'][i])
+                self.shadow_hand_dof_upper_limits.append(shadow_hand_dof_props['upper'][i])
             self.shadow_hand_dof_default_pos.append(0.0)
             self.shadow_hand_dof_default_vel.append(0.0)
 
         self.actuated_dof_indices = to_torch(self.actuated_dof_indices, dtype=torch.long, device=self.device)
+        self.wrist_dof_indices = self.actuated_dof_indices[:2]
+        self.controlled_dof_indices = (
+            self.actuated_dof_indices[2:] if self.reduce_wrist_actions
+            else self.actuated_dof_indices
+        )
         self.shadow_hand_dof_lower_limits = to_torch(self.shadow_hand_dof_lower_limits, device=self.device)
         self.shadow_hand_dof_upper_limits = to_torch(self.shadow_hand_dof_upper_limits, device=self.device)
         self.shadow_hand_dof_default_pos = to_torch(self.shadow_hand_dof_default_pos, device=self.device)
         self.shadow_hand_dof_default_vel = to_torch(self.shadow_hand_dof_default_vel, device=self.device)
+        self.wrist_target_pos = torch.zeros(2, dtype=torch.float, device=self.device)
 
         self.fingertip_handles = [self.gym.find_asset_rigid_body_index(shadow_hand_asset, name) for name in self.fingertips]
 
@@ -601,7 +643,8 @@ class ShadowHand(VecTask):
             self.obs_buf[:, 15:18] = self.object_pose[:, 0:3]
             self.obs_buf[:, 18:22] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            self.obs_buf[:, 22:42] = self.actions
+            action_start = 22
+            self.obs_buf[:, action_start:action_start + self.num_actions] = self.actions
         else:
             # 13*self.num_fingertips = 65
             self.obs_buf[:, 0:65] = self.fingertip_state.reshape(self.num_envs, 65)
@@ -612,7 +655,8 @@ class ShadowHand(VecTask):
             self.obs_buf[:, 78:85] = self.goal_pose
             self.obs_buf[:, 85:89] = quat_mul(self.object_rot, quat_conjugate(self.goal_rot))
 
-            self.obs_buf[:, 89:109] = self.actions
+            action_start = 89
+            self.obs_buf[:, action_start:action_start + self.num_actions] = self.actions
 
     def compute_full_observations(self, no_vel=False):
         if no_vel:
@@ -626,7 +670,8 @@ class ShadowHand(VecTask):
             # 3*self.num_fingertips = 15
             self.obs_buf[:, 42:57] = self.fingertip_pos.reshape(self.num_envs, 15)
 
-            self.obs_buf[:, 57:77] = self.actions
+            action_start = 57
+            self.obs_buf[:, action_start:action_start + self.num_actions] = self.actions
         else:
             self.obs_buf[:, 0:self.num_shadow_hand_dofs] = unscale(self.shadow_hand_dof_pos,
                                                                    self.shadow_hand_dof_lower_limits, self.shadow_hand_dof_upper_limits)
@@ -642,7 +687,8 @@ class ShadowHand(VecTask):
             # 13*self.num_fingertips = 65
             self.obs_buf[:, 72:137] = self.fingertip_state.reshape(self.num_envs, 65)
 
-            self.obs_buf[:, 137:157] = self.actions
+            action_start = 137
+            self.obs_buf[:, action_start:action_start + self.num_actions] = self.actions
 
     def _build_realworld_mask_idx(self):
         n = self.num_shadow_hand_dofs
@@ -687,8 +733,7 @@ class ShadowHand(VecTask):
             self.states_buf[:, fingertip_obs_start + num_ft_states:fingertip_obs_start + num_ft_states +
                             num_ft_force_torques] = self.force_torque_obs_scale * self.vec_sensor_tensor
 
-            # obs_end = 96 + 65 + 30 = 191
-            # obs_total = obs_end + num_actions = 211
+            # obs_end = 96 + 65 + 30 = 191; the action tail is 18 or 20.
             obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
             self.states_buf[:, obs_end:obs_end + self.num_actions] = self.actions
 
@@ -718,8 +763,7 @@ class ShadowHand(VecTask):
             self.obs_buf[:, fingertip_obs_start + num_ft_states:fingertip_obs_start + num_ft_states +
                          num_ft_force_torques] = self.force_torque_obs_scale * self.vec_sensor_tensor
 
-            # obs_end = 96 + 65 + 30 = 191
-            # obs_total = obs_end + num_actions = 211
+            # obs_end = 96 + 65 + 30 = 191; the action tail is 18 or 20.
             obs_end = fingertip_obs_start + num_ft_states + num_ft_force_torques
             self.obs_buf[:, obs_end:obs_end + self.num_actions] = self.actions
 
@@ -848,9 +892,13 @@ class ShadowHand(VecTask):
         rand_delta = delta_min + (delta_max - delta_min) * 0.5 * (rand_floats[:, 5:5+self.num_shadow_hand_dofs] + 1)
 
         pos = self.shadow_hand_default_dof_pos + self.reset_dof_pos_noise * rand_delta
+        if self.freeze_wrist:
+            pos[:, self.wrist_dof_indices] = self.wrist_target_pos
         self.shadow_hand_dof_pos[env_ids, :] = pos
         self.shadow_hand_dof_vel[env_ids, :] = self.shadow_hand_dof_default_vel + \
             self.reset_dof_vel_noise * rand_floats[:, 5+self.num_shadow_hand_dofs:5+self.num_shadow_hand_dofs*2]
+        if self.freeze_wrist:
+            self.shadow_hand_dof_vel[env_ids[:, None], self.wrist_dof_indices] = 0.0
         self.prev_targets[env_ids, :self.num_shadow_hand_dofs] = pos
         self.cur_targets[env_ids, :self.num_shadow_hand_dofs] = pos
 
@@ -882,24 +930,30 @@ class ShadowHand(VecTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         self.actions = actions.clone().to(self.device)
-        if self.wrist_action_clip < 1.0:
+        if self.freeze_wrist and not self.reduce_wrist_actions:
+            self.actions[:, :2] = 0.0
+        elif not self.freeze_wrist and self.wrist_action_clip < 1.0:
             # First two action dims correspond to WRJ1 / WRJ0 (wrist).
             # Clamp applied in both training and test so the env (and the
             # policy's next observation) always sees the constrained action.
             self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
         if self.use_relative_control:
-            targets = self.prev_targets[:, self.actuated_dof_indices] + self.shadow_hand_dof_speed_scale * self.dt * self.action_speed_scale * self.actions
-            self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(targets,
-                                                                          self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
+            targets = self.prev_targets[:, self.controlled_dof_indices] + self.shadow_hand_dof_speed_scale * self.dt * self.action_speed_scale * self.actions
+            self.cur_targets[:, self.controlled_dof_indices] = tensor_clamp(targets,
+                                                                          self.shadow_hand_dof_lower_limits[self.controlled_dof_indices], self.shadow_hand_dof_upper_limits[self.controlled_dof_indices])
         else:
             new_targets = scale(self.actions,
-                                self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
+                                self.shadow_hand_dof_lower_limits[self.controlled_dof_indices], self.shadow_hand_dof_upper_limits[self.controlled_dof_indices])
             eff_moving_average = self.act_moving_average * self.action_speed_scale
-            self.cur_targets[:, self.actuated_dof_indices] = eff_moving_average * new_targets + (1.0 - eff_moving_average) * self.prev_targets[:, self.actuated_dof_indices]
-            self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(self.cur_targets[:, self.actuated_dof_indices],
-                                                                          self.shadow_hand_dof_lower_limits[self.actuated_dof_indices], self.shadow_hand_dof_upper_limits[self.actuated_dof_indices])
+            self.cur_targets[:, self.controlled_dof_indices] = eff_moving_average * new_targets + (1.0 - eff_moving_average) * self.prev_targets[:, self.controlled_dof_indices]
+            self.cur_targets[:, self.controlled_dof_indices] = tensor_clamp(self.cur_targets[:, self.controlled_dof_indices],
+                                                                          self.shadow_hand_dof_lower_limits[self.controlled_dof_indices], self.shadow_hand_dof_upper_limits[self.controlled_dof_indices])
 
-        self.prev_targets[:, self.actuated_dof_indices] = self.cur_targets[:, self.actuated_dof_indices]
+        if self.freeze_wrist:
+            self.cur_targets[:, self.wrist_dof_indices] = self.wrist_target_pos
+        self.prev_targets[:, self.controlled_dof_indices] = self.cur_targets[:, self.controlled_dof_indices]
+        if self.freeze_wrist:
+            self.prev_targets[:, self.wrist_dof_indices] = self.wrist_target_pos
         self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.cur_targets))
 
         if self.force_scale > 0.0:

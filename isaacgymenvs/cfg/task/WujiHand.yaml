@@ -56,7 +56,7 @@ env:
   objectType: "block"
   objectTypePool: []
   objectScaleRanges:
-    block: [1, 1]
+    block: [0.9, 1.1]
     egg: [0.8, 1.2]
     pen: [0.6, 1.2]
     default: [0.8, 1.2]

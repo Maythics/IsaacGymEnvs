@@ -1,0 +1,7 @@
+defaults:
+  - ShadowHandPPO
+  - _self_
+
+params:
+  config:
+    name: ${resolve_default:Shadowhand18,${....experiment}}

@@ -163,7 +163,7 @@ variants. To sanity-check that nothing is broken on the default code path, run
 the original checkpoint with `task.env.realWorldObs=False` (the default) — it
 should reproduce the original eval reward.
 
-### Frozen wrist exploration for WujiHand and XHandHand
+### Frozen wrist exploration
 
 `WujiHand` and `XHandHand` keep their legacy 22- and 14-dimensional action
 interfaces so existing checkpoints load directly, but their first two wrist
@@ -175,6 +175,31 @@ legacy environment behavior (and `task.env.wristActionClip=0.001` to reproduce
 the previous clip), and set
 `train.params.model.name=continuous_a2c_logstd` as well if the wrist outputs
 should be explored again.
+
+`Shadowhand18` is the true reduced-action ShadowHand variant: it exposes only
+the 18 finger actions and physically holds WRJ1/WRJ0 at 0 rad. It therefore
+uses a new 18-wide policy head and is not directly compatible with existing
+20-action `ShadowHand` checkpoints:
+
+```bash
+python train.py task=Shadowhand18 headless=True
+```
+
+`Shadowhand18Tilted` keeps that exact 209-observation, 18-action policy
+interface while rotating the hand root by one fixed world-frame axis-angle at
+reset. It can therefore fine-tune a `Shadowhand18` checkpoint directly. The
+default axis is +Y; increase the angle between runs as a curriculum:
+
+```bash
+python train.py task=Shadowhand18Tilted \
+    checkpoint=/path/to/shadowhand18_stage0.pth \
+    task.env.baseTiltAngleDeg=15 \
+    headless=True
+```
+
+The object inherits the existing calibrated palm-relative spawn position. If a
+tilted reset leaves it too high, adjust the palm-local offset without changing
+code, for example `task.env.objectPalmOffset='[0.0, 0.0, -0.02]'`.
 
 
 ### Configuration and command line arguments

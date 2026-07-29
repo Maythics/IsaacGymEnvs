@@ -46,6 +46,7 @@ from .shadow_hand import ShadowHand
 from .shadow_hand_track import ShadowHandTrack
 from .shadow_hand_clip_track import ShadowHandClipTrack
 from .shadow_hand_tilted import ShadowHandTilted
+from .shadow_hand_fixed_tilt import ShadowHandFixedTilt
 from .shadow_stable_grasp import ShadowStableGrasp
 from .shadow_push import ShadowPush
 from .shadow_flip import ShadowFlip
@@ -128,6 +129,8 @@ isaacgym_task_map = {
     "Ingenuity": Ingenuity,
     "Quadcopter": Quadcopter,
     "ShadowHand": ShadowHand,
+    "Shadowhand18": ShadowHand,
+    "Shadowhand18Tilted": ShadowHandFixedTilt,
     "ShadowHandTrack": ShadowHandTrack,
     "ShadowHandClipTrack": ShadowHandClipTrack,
     "ShadowHandTilted": ShadowHandTilted,
