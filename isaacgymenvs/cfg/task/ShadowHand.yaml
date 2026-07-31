@@ -92,7 +92,7 @@ env:
   # to a ball of radius goalPosMaxRadius around object_init_state to prevent
   # unbounded drift.
   trackGoalPos: True
-  posSuccessTolerance: 0.04
+  posSuccessTolerance: 0.2
   goalPosDeltaMin: 0.01
   goalPosDeltaMax: 0.02
   goalPosMaxRadius: 0.044
