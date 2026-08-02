@@ -340,7 +340,14 @@ class WujiHand(VecTask):
         base_asset_root = os.path.normpath(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets'))
         wuji_asset_root = os.path.join(base_asset_root, "urdf", "wuji")
-        wuji_asset_file = "wuji_right_with_wrist.urdf"
+        # Task variants may select a mechanically different Wuji asset while
+        # the default WujiHand continues to use the original wrist URDF.
+        wuji_asset_file = self.cfg["env"].get(
+            "assetFileNameWuji", "wuji_right_with_wrist.urdf"
+        )
+        self.compatibility_dummy_wrist_dofs = bool(
+            self.cfg["env"].get("compatibilityDummyWristDofs", False)
+        )
 
         # Load Wuji asset
         asset_options = gymapi.AssetOptions()
@@ -364,6 +371,37 @@ class WujiHand(VecTask):
 
         # DEBUG: print actual DOF names in IsaacGym's internal order
         _dof_names = self.gym.get_asset_dof_names(wuji_asset)
+        self.wuji_dof_names = list(_dof_names)
+        wrist_names = ["right_hand_WRJ2", "right_hand_WRJ1"]
+        try:
+            self.wrist_dof_indices_list = [
+                self.wuji_dof_names.index(name) for name in wrist_names
+            ]
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Wuji asset '{wuji_asset_file}' must expose compatibility "
+                f"DOFs {wrist_names}; got {self.wuji_dof_names}."
+            ) from exc
+        finger_dof_indices = [
+            i for i in range(len(self.wuji_dof_names))
+            if i not in self.wrist_dof_indices_list
+        ]
+        policy_to_sim = self.wrist_dof_indices_list + finger_dof_indices
+        sim_to_policy = [0] * len(policy_to_sim)
+        for policy_idx, sim_idx in enumerate(policy_to_sim):
+            sim_to_policy[sim_idx] = policy_idx
+        self.policy_to_sim_dof_indices = to_torch(
+            policy_to_sim, dtype=torch.long, device=self.device
+        )
+        self.sim_to_policy_dof_indices = to_torch(
+            sim_to_policy, dtype=torch.long, device=self.device
+        )
+        self.wrist_dof_indices = to_torch(
+            self.wrist_dof_indices_list, dtype=torch.long, device=self.device
+        )
+        self.policy_wuji_dof_names = [
+            self.wuji_dof_names[i] for i in policy_to_sim
+        ]
         print(f"[WujiHand] DOF names ({len(_dof_names)}): {_dof_names}")
 
         # Set PD drive gains for all DOFs. Wrist DOFs (0-1) get higher stiffness
@@ -371,7 +409,7 @@ class WujiHand(VecTask):
         wuji_dof_props = self.gym.get_asset_dof_properties(wuji_asset)
         for i in range(self.num_wuji_dofs):
             wuji_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
-            if i < 2:
+            if i in self.wrist_dof_indices_list:
                 wuji_dof_props['stiffness'][i] = 5.0
                 wuji_dof_props['damping'][i] = 0.2
             else:
@@ -380,10 +418,16 @@ class WujiHand(VecTask):
 
         # Preserve the original ranges for finite observation normalization,
         # even when the physical wrist limits are locked effectively at 0 rad.
-        original_wrist_lower = [float(wuji_dof_props['lower'][i]) for i in range(2)]
-        original_wrist_upper = [float(wuji_dof_props['upper'][i]) for i in range(2)]
-        if self.freeze_wrist:
-            for i in range(2):
+        original_wrist_lower = {
+            i: float(wuji_dof_props['lower'][i])
+            for i in self.wrist_dof_indices_list
+        }
+        original_wrist_upper = {
+            i: float(wuji_dof_props['upper'][i])
+            for i in self.wrist_dof_indices_list
+        }
+        if self.freeze_wrist and not self.compatibility_dummy_wrist_dofs:
+            for i in self.wrist_dof_indices_list:
                 # A tiny nonzero interval keeps PhysX's joint-limit solver
                 # active; equal lower/upper values may be treated as unlocked.
                 wuji_dof_props['lower'][i] = -1.0e-6
@@ -391,8 +435,12 @@ class WujiHand(VecTask):
                 wuji_dof_props['stiffness'][i] = 1000.0
                 wuji_dof_props['damping'][i] = 100.0
                 wuji_dof_props['effort'][i] = 1000.0
-        else:
-            shrink_dof_limits_inplace(wuji_dof_props, [0, 1], self.wrist_action_clip)
+        elif not self.freeze_wrist:
+            shrink_dof_limits_inplace(
+                wuji_dof_props,
+                self.wrist_dof_indices_list,
+                self.wrist_action_clip,
+            )
 
         # All DOFs are actuated (wrist + fingers)
         self.actuated_dof_indices = to_torch(
@@ -403,7 +451,7 @@ class WujiHand(VecTask):
         self.wuji_dof_default_pos = []
         self.wuji_dof_default_vel = []
         for i in range(self.num_wuji_dofs):
-            if self.freeze_wrist and i < 2:
+            if self.freeze_wrist and i in self.wrist_dof_indices_list:
                 self.wuji_dof_lower_limits.append(original_wrist_lower[i])
                 self.wuji_dof_upper_limits.append(original_wrist_upper[i])
             else:
@@ -420,14 +468,22 @@ class WujiHand(VecTask):
         # In frozen mode the actual wrist joint targets are held at 0 rad.
         self.wrist_target_pos = torch.zeros(2, dtype=torch.float, device=self.device)
         if self.freeze_wrist:
-            self.wuji_dof_default_pos[:2] = self.wrist_target_pos
+            self.wuji_dof_default_pos[self.wrist_dof_indices] = self.wrist_target_pos
 
         # Fingertip rigid-body indices
         self.fingertip_handles = [
             self.gym.find_asset_rigid_body_index(wuji_asset, name)
             for name in self.fingertips
         ]
-        self.palm_body_idx = self.gym.find_asset_rigid_body_index(wuji_asset, _WUJI_PALM)
+        palm_body_name = self.cfg["env"].get("palmBodyName", _WUJI_PALM)
+        self.palm_body_idx = self.gym.find_asset_rigid_body_index(
+            wuji_asset, palm_body_name
+        )
+        if self.palm_body_idx < 0:
+            raise RuntimeError(
+                f"Wuji palm body '{palm_body_name}' was not found in "
+                f"asset '{wuji_asset_file}'."
+            )
 
         # Create force sensors at each fingertip
         sensor_pose = gymapi.Transform()
@@ -699,11 +755,20 @@ class WujiHand(VecTask):
     def compute_full_state(self, asymm_obs=False):
         buf = self.states_buf if asymm_obs else self.obs_buf
         n = self.num_wuji_dofs
+        policy_dof_pos = self.wuji_dof_pos[:, self.policy_to_sim_dof_indices]
+        policy_dof_vel = self.wuji_dof_vel[:, self.policy_to_sim_dof_indices]
+        policy_dof_force = self.dof_force_tensor[:, self.policy_to_sim_dof_indices]
+        policy_lower_limits = self.wuji_dof_lower_limits[
+            self.policy_to_sim_dof_indices
+        ]
+        policy_upper_limits = self.wuji_dof_upper_limits[
+            self.policy_to_sim_dof_indices
+        ]
 
         buf[:, 0:n] = unscale(
-            self.wuji_dof_pos, self.wuji_dof_lower_limits, self.wuji_dof_upper_limits)
-        buf[:, n:2*n] = self.vel_obs_scale * self.wuji_dof_vel
-        buf[:, 2*n:3*n] = self.force_torque_obs_scale * self.dof_force_tensor
+            policy_dof_pos, policy_lower_limits, policy_upper_limits)
+        buf[:, n:2*n] = self.vel_obs_scale * policy_dof_vel
+        buf[:, 2*n:3*n] = self.force_torque_obs_scale * policy_dof_force
 
         obj_obs_start = 3 * n
         buf[:, obj_obs_start:obj_obs_start + 7] = self.object_pose
@@ -863,14 +928,14 @@ class WujiHand(VecTask):
 
         pos = self.wuji_default_dof_pos + self.reset_dof_pos_noise * rand_delta
         if self.freeze_wrist:
-            pos[:, :2] = self.wrist_target_pos
+            pos[:, self.wrist_dof_indices] = self.wrist_target_pos
         self.wuji_dof_pos[env_ids, :] = pos
         self.wuji_dof_vel[env_ids, :] = (
             self.wuji_dof_default_vel
             + self.reset_dof_vel_noise
             * rand_floats[:, 5 + self.num_wuji_dofs:5 + self.num_wuji_dofs * 2])
         if self.freeze_wrist:
-            self.wuji_dof_vel[env_ids, :2] = 0.0
+            self.wuji_dof_vel[env_ids.unsqueeze(-1), self.wrist_dof_indices] = 0.0
         self.prev_targets[env_ids, :self.num_wuji_dofs] = pos
         self.cur_targets[env_ids, :self.num_wuji_dofs] = pos
 
@@ -908,17 +973,18 @@ class WujiHand(VecTask):
         elif self.wrist_action_clip < 1.0:
             # First two action dims correspond to WRJ2 / WRJ1 (wrist).
             self.actions[:, :2] = self.actions[:, :2].clamp(-self.wrist_action_clip, self.wrist_action_clip)
+        sim_actions = self.actions[:, self.sim_to_policy_dof_indices]
         if self.use_relative_control:
             targets = (self.prev_targets[:, self.actuated_dof_indices]
                        + self.wuji_dof_speed_scale * self.dt * self.action_speed_scale
-                       * self.actions)
+                       * sim_actions)
             self.cur_targets[:, self.actuated_dof_indices] = tensor_clamp(
                 targets,
                 self.wuji_dof_lower_limits[self.actuated_dof_indices],
                 self.wuji_dof_upper_limits[self.actuated_dof_indices])
         else:
             new_targets = scale(
-                self.actions,
+                sim_actions,
                 self.wuji_dof_lower_limits[self.actuated_dof_indices],
                 self.wuji_dof_upper_limits[self.actuated_dof_indices])
             eff_moving_average = self.act_moving_average * self.action_speed_scale
@@ -934,7 +1000,7 @@ class WujiHand(VecTask):
         if self.freeze_wrist:
             # Set explicitly in both control modes so the actual wrist joint
             # targets remain at zero, even if a caller supplies legacy actions.
-            self.cur_targets[:, :2] = self.wrist_target_pos
+            self.cur_targets[:, self.wrist_dof_indices] = self.wrist_target_pos
 
         self.prev_targets[:, self.actuated_dof_indices] = \
             self.cur_targets[:, self.actuated_dof_indices]

@@ -7,6 +7,15 @@ defaults:
 name: WujiHandFixedTilt
 
 env:
+  # The actual WRJ2/WRJ1 joints connecting forearm to palm are fixed in this
+  # asset. Two unloaded invisible joints retain the legacy 22-DOF checkpoint
+  # interface without being mechanically connected to the hand.
+  assetFileNameWuji: wuji_right_fixed_wrist_compat.urdf
+  compatibilityDummyWristDofs: true
+  # collapse_fixed_joints merges the rigid forearm/wrist/palm chain under the
+  # forearm body name; both frames share the same origin in the Wuji URDF.
+  palmBodyName: right_hand_forearm
+
   # World-frame axis-angle base rotation. Positive angles use the right-hand
   # rule and remain constant throughout an episode.
   baseTiltAngleDeg: 0.0

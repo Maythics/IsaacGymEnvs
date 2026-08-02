@@ -146,21 +146,22 @@
       "worker_id": null
     },
     "p045_t090": {
-      "attempts": 0,
+      "attempts": 1,
       "best_reward": null,
       "completed_at": null,
       "completion_seq": null,
-      "log_path": null,
+      "log_path": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/curriculum_runs/shadowhand18_tilt_42/logs/sh18tilt_09_p045_t090_a01.log",
       "manifest_index": 8,
       "message": null,
-      "output_checkpoint": null,
-      "parent_checkpoint": null,
-      "parent_id": null,
-      "run_name": null,
-      "staged_checkpoint": null,
-      "started_at": null,
-      "status": "pending",
-      "worker_id": null
+      "output_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/sh18tilt_09_p045_t090_a01/nn/sh18tilt_09_p045_t090_a01.pth",
+      "parent_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/sh18tilt_03_p000_t090_a01/nn/sh18tilt_03_p000_t090_a01.pth",
+      "parent_id": "p000_t090",
+      "pid": 2316753,
+      "run_name": "sh18tilt_09_p045_t090_a01",
+      "staged_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/curriculum_runs/shadowhand18_tilt_42/staged_checkpoints/sh18tilt_09_p045_t090_a01_parent.pth",
+      "started_at": "2026-08-02T13:43:37Z",
+      "status": "running",
+      "worker_id": 1
     },
     "p045_t120": {
       "attempts": 1,
@@ -182,21 +183,21 @@
     },
     "p045_t150": {
       "attempts": 1,
-      "best_reward": null,
-      "completed_at": null,
+      "best_reward": 23.602096557617188,
+      "completed_at": "2026-08-02T13:43:37Z",
       "completion_seq": null,
       "log_path": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/curriculum_runs/shadowhand18_tilt_42/logs/sh18tilt_07_p045_t150_a01.log",
       "manifest_index": 6,
-      "message": null,
+      "message": "per-target wall-clock timeout of 10800 seconds reached",
       "output_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/sh18tilt_07_p045_t150_a01/nn/sh18tilt_07_p045_t150_a01.pth",
       "parent_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/sh18tilt_05_p000_t150_a01/nn/sh18tilt_05_p000_t150_a01.pth",
       "parent_id": "p000_t150",
-      "pid": 1818912,
+      "return_code": -15,
       "run_name": "sh18tilt_07_p045_t150_a01",
-      "staged_checkpoint": "/home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/curriculum_runs/shadowhand18_tilt_42/staged_checkpoints/sh18tilt_07_p045_t150_a01_parent.pth",
+      "staged_checkpoint": null,
       "started_at": "2026-08-02T10:43:35Z",
-      "status": "running",
-      "worker_id": 1
+      "status": "timed_out",
+      "worker_id": null
     },
     "p090_t030": {
       "attempts": 0,
@@ -727,6 +728,6 @@
       "worker_id": null
     }
   },
-  "updated_at": "2026-08-02T11:24:50Z",
+  "updated_at": "2026-08-02T13:43:37Z",
   "version": 1
 }

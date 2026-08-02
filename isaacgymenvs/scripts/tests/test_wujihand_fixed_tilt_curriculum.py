@@ -1,5 +1,8 @@
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import yaml
 
 from isaacgymenvs.scripts import run_shadowhand18_tilt_curriculum as core
 from isaacgymenvs.scripts import run_wujihand_fixed_tilt_curriculum as wuji_launcher
@@ -12,11 +15,19 @@ WUJI_MANIFEST = (
     / "curricula"
     / "wujihand_fixed_tilt_42.yaml"
 )
-SHADOW_MANIFEST = (
+WUJI_TASK_CONFIG = (
     REPOSITORY_ROOT
     / "isaacgymenvs"
-    / "curricula"
-    / "shadowhand18_tilt_42.yaml"
+    / "cfg"
+    / "task"
+    / "WujiHandFixedTilt.yaml"
+)
+FIXED_WRIST_ASSET = (
+    REPOSITORY_ROOT
+    / "assets"
+    / "urdf"
+    / "wuji"
+    / "wuji_right_fixed_wrist_compat.urdf"
 )
 
 
@@ -31,22 +42,31 @@ class WujiManifestTests(unittest.TestCase):
         reward = core.read_checkpoint_reward(manifest["seed_checkpoint"])
         self.assertGreater(reward, float(manifest["training"]["score_to_win"]))
 
-    def test_all_42_offsets_are_copied_exactly_from_shadow_manifest(self):
+    def test_all_42_wuji_offsets_are_calibrated(self):
         wuji = core.load_manifest(
             WUJI_MANIFEST, require_offsets=False, require_seed=True
-        )
-        shadow = core.load_manifest(
-            SHADOW_MANIFEST, require_offsets=False, require_seed=True
         )
         wuji_offsets = {
             target.target_id: target.object_offset for target in wuji["targets"]
         }
-        shadow_offsets = {
-            target.target_id: target.object_offset for target in shadow["targets"]
-        }
-        self.assertEqual(shadow_offsets, wuji_offsets)
         self.assertEqual(42, len(wuji_offsets))
         self.assertEqual(0, sum(offset is None for offset in wuji_offsets.values()))
+
+    def test_fixed_tilt_uses_physically_fixed_compatibility_asset(self):
+        with WUJI_TASK_CONFIG.open("r", encoding="utf-8") as stream:
+            config = yaml.safe_load(stream)
+        self.assertEqual(
+            "wuji_right_fixed_wrist_compat.urdf",
+            config["env"]["assetFileNameWuji"],
+        )
+        self.assertTrue(config["env"]["compatibilityDummyWristDofs"])
+
+        root = ET.parse(str(FIXED_WRIST_ASSET)).getroot()
+        joints = {joint.attrib["name"]: joint for joint in root.findall("joint")}
+        self.assertEqual("revolute", joints["right_hand_WRJ2"].attrib["type"])
+        self.assertEqual("revolute", joints["right_hand_WRJ1"].attrib["type"])
+        self.assertEqual("fixed", joints["right_hand_WRJ2_fixed"].attrib["type"])
+        self.assertEqual("fixed", joints["right_hand_WRJ1_fixed"].attrib["type"])
 
     def test_wuji_command_targets_new_fixed_tilt_task(self):
         manifest = core.load_manifest(
@@ -69,7 +89,7 @@ class WujiManifestTests(unittest.TestCase):
             wuji_launcher.make_wuji_run_name(target, 1),
         )
 
-    def test_copied_offsets_pass_strict_validation(self):
+    def test_calibrated_offsets_pass_strict_validation(self):
         manifest = core.load_manifest(
             WUJI_MANIFEST, require_offsets=True, require_seed=True
         )

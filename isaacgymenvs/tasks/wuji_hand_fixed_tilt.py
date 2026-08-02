@@ -57,6 +57,17 @@ class WujiHandFixedTilt(WujiHand):
             virtual_screen_capture, force_render,
         )
 
+        expected_compat_dofs = ["right_hand_WRJ2", "right_hand_WRJ1"]
+        if (
+            self.num_wuji_dofs != 22
+            or self.policy_wuji_dof_names[:2] != expected_compat_dofs
+        ):
+            raise RuntimeError(
+                "WujiHandFixedTilt must expose the legacy 22-DOF ordering; "
+                f"got {self.num_wuji_dofs} DOFs beginning with "
+                f"{self.policy_wuji_dof_names[:2]}."
+            )
+
         axis = torch.tensor(
             self._base_tilt_axis_cfg, dtype=torch.float, device=self.device
         )
