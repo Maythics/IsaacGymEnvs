@@ -1,0 +1,154 @@
+# Cooperative Shadowhand18Tilted curriculum over 42 unique gravity-in-palm
+# directions. Fill every object_palm_offset before running the launcher.
+version: 1
+name: shadowhand18_tilt_42
+
+seed:
+  # Editable fallback starting checkpoint. The launcher also considers every
+  # successful existing_start_checkpoint below and chooses the closest one.
+  start_checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_28-20-15-05_15/nn/Shadowhand18Tilted.pth
+  theta_deg: 15
+  phi_deg: 0
+  base_tilt_axis: [0.0, 1.0, 0.0]
+
+# Existing policies with last_mean_rewards > 2500. Angles above 180 degrees in
+# their original configs are written here in the equivalent canonical form:
+# Rot(+Y, angle) == Rot(-Y, 360-angle), hence phi=180.
+# These are immediately available as parents; newly completed curriculum
+# checkpoints are added to the same closest-parent pool at runtime.
+existing_start_checkpoints:
+  - id: existing_p000_t060
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_29-21-15-32_60/nn/Shadowhand18Tilted.pth
+    theta_deg: 60
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 23833.1387
+  - id: existing_p000_t090
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-10-12-38_90/nn/Shadowhand18Tilted.pth
+    theta_deg: 90
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 6905.8926
+  - id: existing_p000_t115
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-13-27-59_115/nn/Shadowhand18Tilted.pth
+    theta_deg: 115
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 10400.4336
+  - id: existing_p000_t130
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-20-09-02_130/nn/Shadowhand18Tilted.pth
+    theta_deg: 130
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 22086.3066
+  - id: existing_p000_t150
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-20-20-51_150/nn/Shadowhand18Tilted.pth
+    theta_deg: 150
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 14185.9805
+  - id: existing_south_pole
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-21-46-52_180/nn/Shadowhand18Tilted.pth
+    theta_deg: 180
+    phi_deg: 0
+    base_tilt_axis: [0.0, 1.0, 0.0]
+    recorded_reward: 25952.3496
+  - id: existing_p180_t160
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_31-10-08-26_200/nn/Shadowhand18Tilted.pth
+    theta_deg: 160
+    phi_deg: 180
+    base_tilt_axis: [0.0, -1.0, 0.0]
+    recorded_reward: 6382.3726
+  - id: existing_p180_t120
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_01-12-16-03_240/nn/Shadowhand18Tilted.pth
+    theta_deg: 120
+    phi_deg: 180
+    base_tilt_axis: [0.0, -1.0, 0.0]
+    recorded_reward: 3132.7581
+  - id: existing_p180_t080
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_01-12-19-57_280/nn/Shadowhand18Tilted.pth
+    theta_deg: 80
+    phi_deg: 180
+    base_tilt_axis: [0.0, -1.0, 0.0]
+    recorded_reward: 8960.4209
+  - id: existing_p180_t040
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_02-10-48-44_320/nn/Shadowhand18Tilted.pth
+    theta_deg: 40
+    phi_deg: 180
+    base_tilt_axis: [0.0, -1.0, 0.0]
+    recorded_reward: 3039.5747
+  - id: existing_p180_t010
+    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_02-11-48-20_350/nn/Shadowhand18Tilted.pth
+    theta_deg: 10
+    phi_deg: 180
+    base_tilt_axis: [0.0, -1.0, 0.0]
+    recorded_reward: 5773.8628
+
+training:
+  num_envs: 10240
+  minibatch_size: 10240
+  max_iterations: 200000
+  episode_length: 300
+  score_to_win: 2500
+  save_best_after: 1
+  object_type: block
+  gpu: "0"
+  workers: 2
+  timeout_seconds: 10800
+
+# Direction convention:
+#   base_tilt_axis = [-sin(phi), cos(phi), 0]
+#   gravity/palm direction = [sin(theta) cos(phi), sin(theta) sin(phi), cos(theta)]
+# The serpentine order makes neighboring FIFO targets close. The first two
+# workers start at theta=30 and theta=60, as requested.
+targets:
+  - {id: p000_t030, phi_deg: 0,   theta_deg: 30,  base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.0, -0.01], offset_source: Shadowhand18Tilted_28-21-45-23_30}
+  - {id: p000_t060, phi_deg: 0,   theta_deg: 60,  base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.06, 0.0],  offset_source: Shadowhand18Tilted_29-21-15-32_60}
+  - {id: p000_t090, phi_deg: 0,   theta_deg: 90,  base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.06, 0.0],  offset_source: Shadowhand18Tilted_30-10-12-38_90}
+  - {id: p000_t120, phi_deg: 0,   theta_deg: 120, base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.09, 0.01], offset_source: Shadowhand18Tilted_30-13-27-59_115}
+  - {id: p000_t150, phi_deg: 0,   theta_deg: 150, base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.09, 0.01], offset_source: Shadowhand18Tilted_30-20-20-51_150}
+  - {id: south_pole, phi_deg: 0,  theta_deg: 180, base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.09, 0.01], offset_source: Shadowhand18Tilted_30-21-46-52_180}
+
+  - {id: p045_t150, phi_deg: 45,  theta_deg: 150, base_tilt_axis: [-0.70710678, 0.70710678, 0.0],     object_palm_offset: [0.08, 0.1, 0.01]}
+  - {id: p045_t120, phi_deg: 45,  theta_deg: 120, base_tilt_axis: [-0.70710678, 0.70710678, 0.0],     object_palm_offset: [0.08, 0.08, 0.01]}
+  - {id: p045_t090, phi_deg: 45,  theta_deg: 90,  base_tilt_axis: [-0.70710678, 0.70710678, 0.0],     object_palm_offset: [0.08, 0.08, 0.01]}
+  - {id: p045_t060, phi_deg: 45,  theta_deg: 60,  base_tilt_axis: [-0.70710678, 0.70710678, 0.0],     object_palm_offset: [0.1, 0.06, 0.01]}
+  - {id: p045_t030, phi_deg: 45,  theta_deg: 30,  base_tilt_axis: [-0.70710678, 0.70710678, 0.0],     object_palm_offset: [0.08, 0.09, 0.01]}
+
+  - {id: p090_t030, phi_deg: 90,  theta_deg: 30,  base_tilt_axis: [-1.0, 0.0, 0.0],                   object_palm_offset: [0.08, 0.09, 0.01]}
+  - {id: p090_t060, phi_deg: 90,  theta_deg: 60,  base_tilt_axis: [-1.0, 0.0, 0.0],                   object_palm_offset: [0.08, 0.09, 0.01]}
+  - {id: p090_t090, phi_deg: 90,  theta_deg: 90,  base_tilt_axis: [-1.0, 0.0, 0.0],                   object_palm_offset: [0.08, 0.09, 0.01]}
+  - {id: p090_t120, phi_deg: 90,  theta_deg: 120, base_tilt_axis: [-1.0, 0.0, 0.0],                   object_palm_offset: [0.08, 0.09, 0.01]}
+  - {id: p090_t150, phi_deg: 90,  theta_deg: 150, base_tilt_axis: [-1.0, 0.0, 0.0],                   object_palm_offset: [0.08, 0.09, 0.01]}
+
+  - {id: p135_t150, phi_deg: 135, theta_deg: 150, base_tilt_axis: [-0.70710678, -0.70710678, 0.0],    object_palm_offset: [0.03, 0.08, 0.07]}
+  - {id: p135_t120, phi_deg: 135, theta_deg: 120, base_tilt_axis: [-0.70710678, -0.70710678, 0.0],    object_palm_offset: [0.03, 0.08, 0.07]}
+  - {id: p135_t090, phi_deg: 135, theta_deg: 90,  base_tilt_axis: [-0.70710678, -0.70710678, 0.0],    object_palm_offset: [0.03, 0.08, 0.07]}
+  - {id: p135_t060, phi_deg: 135, theta_deg: 60,  base_tilt_axis: [-0.70710678, -0.70710678, 0.0],    object_palm_offset: [-0.00, 0.04, 0.04]}
+  - {id: p135_t030, phi_deg: 135, theta_deg: 30,  base_tilt_axis: [-0.70710678, -0.70710678, 0.0],    object_palm_offset: [-0.04, 0.0, 0.0], offset_source: Shadowhand18Tilted_02-15-42-07}
+
+  - {id: p180_t030, phi_deg: 180, theta_deg: 30,  base_tilt_axis: [0.0, -1.0, 0.0],                  object_palm_offset: [0.04, 0.09, 0.01], offset_source: Shadowhand18Tilted_02-10-48-44_320}
+  - {id: p180_t060, phi_deg: 180, theta_deg: 60,  base_tilt_axis: [0.0, -1.0, 0.0],                  object_palm_offset: [0.04, 0.09, 0.01], offset_source: Shadowhand18Tilted_02-10-48-44_320}
+  - {id: p180_t090, phi_deg: 180, theta_deg: 90,  base_tilt_axis: [0.0, -1.0, 0.0],                  object_palm_offset: [0.0, 0.09, 0.01],  offset_source: Shadowhand18Tilted_01-12-19-57_280}
+  - {id: p180_t120, phi_deg: 180, theta_deg: 120, base_tilt_axis: [0.0, -1.0, 0.0],                  object_palm_offset: [0.0, 0.09, 0.01],  offset_source: Shadowhand18Tilted_01-12-16-03_240}
+  - {id: p180_t150, phi_deg: 180, theta_deg: 150, base_tilt_axis: [0.0, -1.0, 0.0],                  object_palm_offset: [0.04, 0.09, 0.01], offset_source: Shadowhand18Tilted_31-10-08-26_200}
+
+  - {id: p225_t150, phi_deg: 225, theta_deg: 150, base_tilt_axis: [0.70710678, -0.70710678, 0.0],     object_palm_offset: [0.04 ,0.09,0.00]}
+  - {id: p225_t120, phi_deg: 225, theta_deg: 120, base_tilt_axis: [0.70710678, -0.70710678, 0.0],     object_palm_offset: [0.04, 0.09, 0.0]}
+  - {id: p225_t090, phi_deg: 225, theta_deg: 90,  base_tilt_axis: [0.70710678, -0.70710678, 0.0],     object_palm_offset: [0.04, 0.08, 0.0]}
+  - {id: p225_t060, phi_deg: 225, theta_deg: 60,  base_tilt_axis: [0.70710678, -0.70710678, 0.0],     object_palm_offset: [0.04, 0.05, 0.0]}
+  - {id: p225_t030, phi_deg: 225, theta_deg: 30,  base_tilt_axis: [0.70710678, -0.70710678, 0.0],     object_palm_offset: [0.04, 0.05, 0.0]}
+
+  - {id: p270_t030, phi_deg: 270, theta_deg: 30,  base_tilt_axis: [1.0, 0.0, 0.0],                    object_palm_offset: [0.04, 0.05, 0.0]}
+  - {id: p270_t060, phi_deg: 270, theta_deg: 60,  base_tilt_axis: [1.0, 0.0, 0.0],                    object_palm_offset: [0.04, 0.08, 0.0]}
+  - {id: p270_t090, phi_deg: 270, theta_deg: 90,  base_tilt_axis: [1.0, 0.0, 0.0],                    object_palm_offset: [0.04, 0.08, 0.0]}
+  - {id: p270_t120, phi_deg: 270, theta_deg: 120, base_tilt_axis: [1.0, 0.0, 0.0],                    object_palm_offset: [0.04, 0.08, 0.0]}
+  - {id: p270_t150, phi_deg: 270, theta_deg: 150, base_tilt_axis: [1.0, 0.0, 0.0],                    object_palm_offset: [0.06 ,0.08, 0.0]}
+
+  - {id: p315_t150, phi_deg: 315, theta_deg: 150, base_tilt_axis: [0.70710678, 0.70710678, 0.0],      object_palm_offset: [0.06 ,0.08, 0.0]}
+  - {id: p315_t120, phi_deg: 315, theta_deg: 120, base_tilt_axis: [0.70710678, 0.70710678, 0.0],      object_palm_offset: [0.06 ,0.08, 0.0]}
+  - {id: p315_t090, phi_deg: 315, theta_deg: 90,  base_tilt_axis: [0.70710678, 0.70710678, 0.0],      object_palm_offset: [0.06 ,0.08, 0.0]}
+  - {id: p315_t060, phi_deg: 315, theta_deg: 60,  base_tilt_axis: [0.70710678, 0.70710678, 0.0],      object_palm_offset: [0.06 ,0.08, 0.0]}
+  - {id: p315_t030, phi_deg: 315, theta_deg: 30,  base_tilt_axis: [0.70710678, 0.70710678, 0.0],      object_palm_offset: [0.06 ,0.08, 0.0]}
+
+  - {id: north_pole, phi_deg: 0,  theta_deg: 0,   base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.0, 0.0, 0.0],   offset_source: Shadowhand18Tilted_02-11-48-20_350}

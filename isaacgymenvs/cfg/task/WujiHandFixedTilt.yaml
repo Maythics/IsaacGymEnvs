@@ -1,0 +1,21 @@
+# Fixed-base WujiHand curriculum variant. Physics/reset frames change, while
+# the zero-degree WujiHand policy interface stays 207 observations / 22 actions.
+defaults:
+  - WujiHand
+  - _self_
+
+name: WujiHandFixedTilt
+
+env:
+  # World-frame axis-angle base rotation. Positive angles use the right-hand
+  # rule and remain constant throughout an episode.
+  baseTiltAngleDeg: 0.0
+  baseTiltAxis: [0.0, 1.0, 0.0]
+
+  # Palm-local object translation copied by the curriculum manifest and
+  # manually tuned per gravity-in-palm direction.
+  objectPalmOffset: [0.0, 0.0, 0.0]
+
+  # Local to WujiHandFixedTilt: distance=1 with +Z normal places the plane at
+  # world z=-1, so a dropped object crosses fallDistance before ground contact.
+  groundPlaneDistance: 1.0

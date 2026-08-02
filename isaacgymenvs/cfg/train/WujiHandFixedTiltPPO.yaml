@@ -1,0 +1,7 @@
+defaults:
+  - WujiHandPPO
+  - _self_
+
+params:
+  config:
+    name: ${resolve_default:WujiHandFixedTilt,${....experiment}}

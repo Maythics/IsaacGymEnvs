@@ -56,6 +56,7 @@ from .xhand_push import XHandPush
 from .xhand_flip import XHandFlip
 from .xhand_pour import XHandPour
 from .wuji_hand import WujiHand
+from .wuji_hand_fixed_tilt import WujiHandFixedTilt
 from .wuji_hand_tilted import WujiHandTilted
 from .wuji_flip import WujiFlip
 from .wuji_push import WujiPush
@@ -144,6 +145,7 @@ isaacgym_task_map = {
     "XHandFlip": XHandFlip,
     "XHandPour": XHandPour,
     "WujiHand": WujiHand,
+    "WujiHandFixedTilt": WujiHandFixedTilt,
     "WujiHandTiltedSE3": WujiHandTilted,
     "WujiFlip": WujiFlip,
     "WujiPush": WujiPush,
