@@ -1,0 +1,28 @@
+# Evaluation-only Shadowhand18 task. The base rotates continuously around the
+# world Y axis while an external evaluator supplies an object-in-palm target.
+defaults:
+  - Shadowhand18
+  - _self_
+
+name: Shadowhand18RotatingBaseTarget
+
+env:
+  # The evaluator supplies already-filtered normalized effective PD targets.
+  # Run one task step per 60 Hz physics step and do not filter the targets again.
+  controlFrequencyInv: 1
+  useRelativeControl: False
+  stiffnessScale: 1.0
+  actionSpeedScale: 1.0
+  actionsMovingAverage: 1.0
+
+  episodeLength: 1200
+  trackGoalPos: True
+  successTolerance: 0.3
+  posSuccessTolerance: 0.025
+  maxConsecutiveSuccesses: 0
+
+  # Signed rad/s around fixed world Y. Override from the evaluator CLI.
+  baseAngularVelocityRadS: 0.2
+  baseInitialAngleDeg: 0.0
+  baseMotionDelaySec: 0.5
+
