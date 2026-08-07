@@ -205,6 +205,7 @@ class Env(ABC):
 
 
 class VecTask(Env):
+    has_sim_step_forces = False
 
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": 24}
 
@@ -357,6 +358,15 @@ class VecTask(Env):
     def post_physics_step(self):
         """Compute reward and observations, reset any environments that require it."""
 
+    def apply_sim_step_forces(self, substep: int):
+        """Apply continuous forces before each simulator substep.
+
+        Isaac Gym clears externally applied forces after a simulation step.
+        Tasks with gravity compensation can override this hook without
+        duplicating the common control and rendering loop.
+        """
+        return None
+
     def step(self, actions: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, Any]]:
         """Step the physics of the environment.
 
@@ -379,6 +389,8 @@ class VecTask(Env):
         for i in range(self.control_freq_inv):
             if self.force_render:
                 self.render()
+            if self.has_sim_step_forces:
+                self.apply_sim_step_forces(i)
             self.gym.simulate(self.sim)
 
         # to fix!

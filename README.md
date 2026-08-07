@@ -201,6 +201,62 @@ The object inherits the existing calibrated palm-relative spawn position. If a
 tilted reset leaves it too high, adjust the palm-local offset without changing
 code, for example `task.env.objectPalmOffset='[0.0, 0.0, -0.02]'`.
 
+Both `Shadowhand18Tilted` and `WujiHandFixedTilt` can cancel gravity on only
+the manipulated object for a short grasping grace period after every reset.
+The implementation is part of the normal registered tasks, so curriculum and
+standalone viewer runs have identical physics. A 0.2-second hold followed by
+a 0.1-second ramp can be visualized while manually tuning the palm-local
+offset with:
+
+```bash
+python train.py task=Shadowhand18Tilted test=True headless=False \
+    checkpoint=/path/to/Shadowhand18Tilted.pth \
+    task.env.baseTiltAngleDeg=150 \
+    task.env.baseTiltAxis='[0.0,1.0,0.0]' \
+    task.env.objectPalmOffset='[0.08,0.09,0.01]' \
+    task.env.objectGravityCompensationSeconds=0.2 \
+    task.env.objectGravityRampSeconds=0.1
+```
+
+Use `task=WujiHandFixedTilt` for Wuji. Setting
+`task.env.objectGravityCompensationSeconds=0` exactly disables the feature for
+legacy checkpoint evaluation.
+
+The resumable tilted curricula keep the first 42 manually verified offsets and
+add evenly spread maximin training cases until the sphere has 15-degree
+coverage. There are no transfer-only bridge cases. Each added case copies its
+offset exactly from the nearest verified direction. Edit `gpu_ids` and
+`checkpoint_search_roots` in the corresponding manifest before launching. The
+launcher assigns at most one trainer to each GPU, selects a divisible
+environment/minibatch profile from current free memory, and promotes a policy
+as soon as the saved RL-Games checkpoint has `last_mean_rewards` strictly
+above `score_to_win` (2500 by default). Physical retained-success evaluation
+is an optional diagnostic and cannot stop the training queue.
+
+For world-frame MLP checkpoints, the launcher also selects an equivalent
+world-Z `task.env.baseYawDeg` for each parent-to-child transition. This leaves
+gravity in the palm and palm-local offsets unchanged, while avoiding the
+arbitrary roll discontinuity of the historical axis-angle grid. The selected
+yaw and resulting hand SO(3) distance are recorded in state and logs.
+
+```bash
+# This report is allowed even before moved historical checkpoints are found.
+python isaacgymenvs/scripts/run_shadowhand18_tilt_curriculum.py --inspect
+
+python isaacgymenvs/scripts/run_shadowhand18_tilt_curriculum.py \
+    --python=/home/srtp/anaconda3/envs/isaac/bin/python
+
+python isaacgymenvs/scripts/run_wujihand_fixed_tilt_curriculum.py \
+    --python=/home/srtp/anaconda3/envs/isaac/bin/python
+```
+
+Each curriculum uses a new `*_dense_v5` state directory, so old state and
+checkpoints are not overwritten. Every compatible checkpoint found below the
+configured search roots is retained as a possible nearest-angle warm start.
+For the Chinese end-to-end guide, including all 108 manual viewer cases and
+generating exact viewer commands for collected curriculum checkpoints, see
+[`isaacgymenvs/scripts/TILTED_CURRICULUM_USAGE_ZH.md`](isaacgymenvs/scripts/TILTED_CURRICULUM_USAGE_ZH.md).
+
 
 ### Configuration and command line arguments
 

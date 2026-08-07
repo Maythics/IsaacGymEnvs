@@ -19,6 +19,9 @@ from isaacgymenvs.tasks.shadow_hand import (
     randomize_rotation,
     randomize_rotation_pen,
 )
+from isaacgymenvs.tasks.object_gravity_compensation import (
+    ObjectGravityCompensationMixin,
+)
 from isaacgymenvs.utils.torch_jit_utils import (
     quat_conjugate,
     quat_from_angle_axis,
@@ -29,7 +32,7 @@ from isaacgymenvs.utils.torch_jit_utils import (
 )
 
 
-class ShadowHandFixedTilt(ShadowHand):
+class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
     """ShadowHand with a constant root orientation and palm-anchored object reset.
 
     ``baseTiltAngleDeg`` and ``baseTiltAxis`` define a world-frame axis-angle
@@ -44,6 +47,9 @@ class ShadowHandFixedTilt(ShadowHand):
             float(cfg["env"].get("baseTiltAngleDeg", 0.0))
         )
         self._base_tilt_axis_cfg = cfg["env"].get("baseTiltAxis", [0.0, 1.0, 0.0])
+        self._base_yaw_angle_rad = math.radians(
+            float(cfg["env"].get("baseYawDeg", 0.0))
+        )
         self._object_palm_offset_cfg = cfg["env"].get("objectPalmOffset", [0.0, 0.0, 0.0])
 
         if len(self._base_tilt_axis_cfg) != 3:
@@ -53,6 +59,7 @@ class ShadowHandFixedTilt(ShadowHand):
 
         super().__init__(cfg, rl_device, sim_device, graphics_device_id, headless,
                          virtual_screen_capture, force_render)
+        self._configure_object_gravity_compensation(cfg)
 
         axis = torch.tensor(self._base_tilt_axis_cfg, dtype=torch.float,
                             device=self.device)
@@ -90,7 +97,19 @@ class ShadowHandFixedTilt(ShadowHand):
         )
         tilt_axes = self.base_tilt_axis.unsqueeze(0).expand(self.num_envs, -1)
         self.tilt_quat = quat_from_angle_axis(tilt_angles, tilt_axes)
-        self.tilted_hand_quat = quat_mul(self.tilt_quat, self.hand_initial_quat)
+        yaw_angles = torch.full(
+            (self.num_envs,), self._base_yaw_angle_rad, dtype=torch.float,
+            device=self.device,
+        )
+        yaw_axes = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        yaw_axes[:, self.up_axis_idx] = 1.0
+        self.base_yaw_quat = quat_from_angle_axis(yaw_angles, yaw_axes)
+        # A world-Z yaw does not change gravity expressed in the palm frame.
+        # It is selected by the curriculum to make world-frame MLP inputs
+        # continuous with the parent checkpoint.
+        self.tilted_hand_quat = quat_mul(
+            self.base_yaw_quat, quat_mul(self.tilt_quat, self.hand_initial_quat)
+        )
 
         # Preserve the parent task's zero-tilt meaning of these world-frame
         # vectors, but express them in the palm frame so they rotate with the
@@ -114,6 +133,20 @@ class ShadowHandFixedTilt(ShadowHand):
         self.goal_center = initial_object_pos + quat_rotate(
             initial_palm_quat, self.initial_goal_offset_in_palm,
         )
+
+        print(
+            "ShadowHandFixedTilt: angle={:.6g}deg axis={} yaw={:.6g}deg "
+            "objectPalmOffset={}".format(
+                math.degrees(self._base_tilt_angle_rad),
+                list(self._base_tilt_axis_cfg),
+                math.degrees(self._base_yaw_angle_rad),
+                list(self._object_palm_offset_cfg),
+            )
+        )
+
+    def post_physics_step(self):
+        super().post_physics_step()
+        self._publish_gravity_compensation_metrics()
 
     def _fall_ref_pos(self):
         """Measure falling relative to the actual palm rather than the goal."""

@@ -19,6 +19,9 @@ from isaacgymenvs.tasks.wuji_hand import (
     randomize_rotation,
     randomize_rotation_pen,
 )
+from isaacgymenvs.tasks.object_gravity_compensation import (
+    ObjectGravityCompensationMixin,
+)
 from isaacgymenvs.utils.torch_jit_utils import (
     quat_conjugate,
     quat_from_angle_axis,
@@ -29,7 +32,7 @@ from isaacgymenvs.utils.torch_jit_utils import (
 )
 
 
-class WujiHandFixedTilt(WujiHand):
+class WujiHandFixedTilt(ObjectGravityCompensationMixin, WujiHand):
     """WujiHand with a fixed world-frame base tilt and palm-frame resets."""
 
     def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless,
@@ -39,6 +42,9 @@ class WujiHandFixedTilt(WujiHand):
         )
         self._base_tilt_axis_cfg = cfg["env"].get(
             "baseTiltAxis", [0.0, 1.0, 0.0]
+        )
+        self._base_yaw_angle_rad = math.radians(
+            float(cfg["env"].get("baseYawDeg", 0.0))
         )
         self._object_palm_offset_cfg = cfg["env"].get(
             "objectPalmOffset", [0.0, 0.0, 0.0]
@@ -56,6 +62,7 @@ class WujiHandFixedTilt(WujiHand):
             cfg, rl_device, sim_device, graphics_device_id, headless,
             virtual_screen_capture, force_render,
         )
+        self._configure_object_gravity_compensation(cfg)
 
         expected_compat_dofs = ["right_hand_WRJ2", "right_hand_WRJ1"]
         if (
@@ -107,8 +114,17 @@ class WujiHandFixedTilt(WujiHand):
         )
         tilt_axes = self.base_tilt_axis.unsqueeze(0).expand(self.num_envs, -1)
         self.tilt_quat = quat_from_angle_axis(tilt_angles, tilt_axes)
+        yaw_angles = torch.full(
+            (self.num_envs,), self._base_yaw_angle_rad,
+            dtype=torch.float, device=self.device,
+        )
+        yaw_axes = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float, device=self.device
+        )
+        yaw_axes[:, self.up_axis_idx] = 1.0
+        self.base_yaw_quat = quat_from_angle_axis(yaw_angles, yaw_axes)
         self.tilted_hand_quat = quat_mul(
-            self.tilt_quat, self.hand_initial_quat
+            self.base_yaw_quat, quat_mul(self.tilt_quat, self.hand_initial_quat)
         )
 
         # Express all legacy world-frame goal vectors in the original palm
@@ -139,6 +155,20 @@ class WujiHandFixedTilt(WujiHand):
         self.goal_center = initial_object_pos + quat_rotate(
             initial_palm_quat, self.initial_goal_offset_in_palm
         )
+
+        print(
+            "WujiHandFixedTilt: angle={:.6g}deg axis={} yaw={:.6g}deg "
+            "objectPalmOffset={}".format(
+                math.degrees(self._base_tilt_angle_rad),
+                list(self._base_tilt_axis_cfg),
+                math.degrees(self._base_yaw_angle_rad),
+                list(self._object_palm_offset_cfg),
+            )
+        )
+
+    def post_physics_step(self):
+        super().post_physics_step()
+        self._publish_gravity_compensation_metrics()
 
     def _create_ground_plane(self):
         """Keep the ground behavior local to this new Wuji task variant."""

@@ -47,7 +47,7 @@ class WujiManifestTests(unittest.TestCase):
             WUJI_MANIFEST, require_offsets=False, require_seed=True
         )
         wuji_offsets = {
-            target.target_id: target.object_offset for target in wuji["targets"]
+            target.target_id: target.object_offset for target in wuji["targets"][:42]
         }
         self.assertEqual(42, len(wuji_offsets))
         self.assertEqual(0, sum(offset is None for offset in wuji_offsets.values()))
@@ -83,7 +83,9 @@ class WujiManifestTests(unittest.TestCase):
         self.assertIn("task=WujiHandFixedTilt", command)
         self.assertNotIn("task=Shadowhand18Tilted", command)
         self.assertIn("task.env.baseTiltAngleDeg=30", command)
-        self.assertIn("task.env.objectPalmOffset=[0.08,0,-0.01]", command)
+        self.assertIn("task.env.objectPalmOffset=[0,0.05,0]", command)
+        self.assertIn("task.env.objectGravityCompensationSeconds=0.2", command)
+        self.assertIn("task.env.objectGravityRampSeconds=0.1", command)
         self.assertEqual(
             "wujitilt_01_p000_t030_a01",
             wuji_launcher.make_wuji_run_name(target, 1),
@@ -93,7 +95,8 @@ class WujiManifestTests(unittest.TestCase):
         manifest = core.load_manifest(
             WUJI_MANIFEST, require_offsets=True, require_seed=True
         )
-        self.assertEqual(42, len(manifest["targets"]))
+        self.assertGreater(len(manifest["targets"]), 42)
+        self.assertEqual(42, len(manifest["targets"][:42]))
 
 
 if __name__ == "__main__":

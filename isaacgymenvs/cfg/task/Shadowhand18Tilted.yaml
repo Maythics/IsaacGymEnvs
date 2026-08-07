@@ -12,11 +12,21 @@ env:
   # e.g. task.env.baseTiltAngleDeg=15.
   baseTiltAngleDeg: 0.0
   baseTiltAxis: [0.0, 1.0, 0.0]
+  # World-Z yaw is a gravity-in-palm-preserving gauge. The curriculum selects
+  # it to keep world-frame MLP observations close to the parent checkpoint.
+  baseYawDeg: 0.0
 
   # Additional palm-local object translation (meters), on top of the calibrated
   # legacy ShadowHand spawn offset. Adjust this to lower/shift the object after
   # inspecting a tilted reset, without changing source code.
   objectPalmOffset: [0.0, 0.0, 0.0]
+
+  # Cancel gravity on the physical object for this many seconds after every
+  # reset while contacts and policy actions remain active. This is implemented
+  # in the normal task used by training, test mode, and the viewer. Set the
+  # hold time to 0 for exact legacy behavior.
+  objectGravityCompensationSeconds: 0.2
+  objectGravityRampSeconds: 0.1
 
   # Initial and follow-up goal sampling is expressed in the same fixed palm
   # frame. Legacy *Z* limits preserve their zero-tilt meaning, then rotate with

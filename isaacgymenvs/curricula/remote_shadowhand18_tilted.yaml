@@ -1,31 +1,36 @@
-# Cooperative Shadowhand18Tilted curriculum over 42 unique gravity-in-palm
-# directions. Fill every object_palm_offset before running the launcher.
+# Remote, block-only Shadowhand18Tilted curriculum.  The 42 verified
+# gravity-in-palm directions below are automatically densified to 15-degree
+# coverage by the current launcher; no bridge cases are introduced.
 version: 1
-name: shadowhand18_tilt_42
+name: remote_shadowhand18_tilted_block
 
-# Edit these roots when checkpoints move between machines. Missing historical
-# absolute paths below are relocated by run-directory and checkpoint name.
+# Keep the remote run root explicit. All seed/start paths below are also
+# manifest-relative, so moving the whole IsaacGymEnvs tree remains valid.
 checkpoint_search_roots:
-  - /home/srtp/research_manip/IsaacGymEnvs/isaacgymenvs/runs
+  - /remote-home/ums_wangsiyun/zhy_env/IsaacGymEnvs/isaacgymenvs/runs
 
 density:
   # Preserve the 42 verified targets, then add real, evenly spread maximin
   # training cases until every sphere direction is within 15 degrees of one.
   coverage_radius_deg: 15.0
 
-# Runs only after the entire block stage leaves pending/running state and uses
-# the same complete set of verified plus evenly spread dense directions.
+# This manifest intentionally trains block only.  Do not enable this stage
+# until the block policy has been reviewed.
 multi_object_stage:
-  enabled: true
-  object_types: [block, egg, pen]
+  enabled: false
+  object_types: [block]
 
 seed:
   # Editable fallback starting checkpoint. The launcher also considers every
   # successful existing_start_checkpoint below and chooses the closest one.
-  start_checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_28-20-15-05_15/nn/Shadowhand18Tilted.pth
+  start_checkpoint: ../runs/Shadowhand18Tilted_28-20-15-05_15/nn/Shadowhand18Tilted.pth
   theta_deg: 15
   phi_deg: 0
   base_tilt_axis: [0.0, 1.0, 0.0]
+  # Historical remote checkpoint orientation. The launcher computes a new
+  # child world-Z yaw for every real parent -> child transition, preserving
+  # gravity-in-palm while avoiding world-frame MLP observation jumps.
+  base_yaw_deg: 0.0
 
 # Existing policies with last_mean_rewards > 2500. Angles above 180 degrees in
 # their original configs are written here in the equivalent canonical form:
@@ -34,90 +39,69 @@ seed:
 # checkpoints are added to the same closest-parent pool at runtime.
 existing_start_checkpoints:
   - id: existing_p000_t060
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_29-21-15-32_60/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_29-21-15-32_60/nn/Shadowhand18Tilted.pth
     theta_deg: 60
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 23833.1387
   - id: existing_p000_t090
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-10-12-38_90/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_30-10-12-38_90/nn/Shadowhand18Tilted.pth
     theta_deg: 90
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 6905.8926
   - id: existing_p000_t115
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-13-27-59_115/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_30-13-27-59_115/nn/Shadowhand18Tilted.pth
     theta_deg: 115
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 10400.4336
   - id: existing_p000_t130
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-20-09-02_130/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_30-20-09-02_130/nn/Shadowhand18Tilted.pth
     theta_deg: 130
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 22086.3066
   - id: existing_p000_t150
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-20-20-51_150/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_30-20-20-51_150/nn/Shadowhand18Tilted.pth
     theta_deg: 150
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 14185.9805
   - id: existing_south_pole
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_30-21-46-52_180/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_30-21-46-52_180/nn/Shadowhand18Tilted.pth
     theta_deg: 180
     phi_deg: 0
     base_tilt_axis: [0.0, 1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 25952.3496
   - id: existing_p180_t160
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_31-10-08-26_200/nn/Shadowhand18Tilted.pth
+    checkpoint: ../runs/Shadowhand18Tilted_31-10-08-26_200/nn/Shadowhand18Tilted.pth
     theta_deg: 160
     phi_deg: 180
     base_tilt_axis: [0.0, -1.0, 0.0]
+    base_yaw_deg: 0.0
     recorded_reward: 6382.3726
-  - id: existing_p180_t120
-    # Preserve this source when it is mounted; do not block a new machine
-    # that only has the other verified parents locally.
-    optional: true
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_01-12-16-03_240/nn/Shadowhand18Tilted.pth
-    theta_deg: 120
-    phi_deg: 180
-    base_tilt_axis: [0.0, -1.0, 0.0]
-    recorded_reward: 3132.7581
-  - id: existing_p180_t080
-    optional: true
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_01-12-19-57_280/nn/Shadowhand18Tilted.pth
-    theta_deg: 80
-    phi_deg: 180
-    base_tilt_axis: [0.0, -1.0, 0.0]
-    recorded_reward: 8960.4209
-  - id: existing_p180_t040
-    optional: true
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_02-10-48-44_320/nn/Shadowhand18Tilted.pth
-    theta_deg: 40
-    phi_deg: 180
-    base_tilt_axis: [0.0, -1.0, 0.0]
-    recorded_reward: 3039.5747
-  - id: existing_p180_t010
-    optional: true
-    checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/Shadowhand18Tilted_02-11-48-20_350/nn/Shadowhand18Tilted.pth
-    theta_deg: 10
-    phi_deg: 180
-    base_tilt_axis: [0.0, -1.0, 0.0]
-    recorded_reward: 5773.8628
 
 training:
+  # Conservative fallback and profiles for the observed ~24 GiB free remote
+  # GPUs.  One worker is placed on each listed GPU, so 24 GiB selects 10240
+  # envs instead of the legacy 40960-env profile.
   num_envs: 10240
   minibatch_size: 10240
   max_iterations: 200000
   episode_length: 300
   score_to_win: 2500
-  # Soft continuity target: prefer yaw-optimized hand transitions at or below
-  # this value, then immediately use the nearest successful parent as fallback.
-  # It never blocks other workers after a timeout/failure.
+  # Soft 30-degree continuity target. If the closest remote frontier failed,
+  # immediately continue from the globally nearest successful parent.
   max_parent_transition_deg: 30.0
-  # Do not warm-start from arbitrary low-reward files discovered under runs/.
-  # Explicit historical parents above remain compatible regardless of filename.
+  # The old remote tree contains low-reward *_rew_* checkpoints. Do not let
+  # discovery use them as parents; listed historical checkpoints stay valid.
   discovered_parent_min_reward: 2500
   allow_unscored_discovered_parents: false
   # Checkpoint progression is deliberately score-driven: once the saved
@@ -153,8 +137,10 @@ training:
 # Direction convention:
 #   base_tilt_axis = [-sin(phi), cos(phi), 0]
 #   gravity/palm direction = [sin(theta) cos(phi), sin(theta) sin(phi), cos(theta)]
-# The serpentine order makes neighboring FIFO targets close. The first two
-# workers start at theta=30 and theta=60, as requested.
+# The initial order is only a geometric fallback. At launch, every target gets
+# the optimal equivalent task.env.baseYawDeg from its actual selected parent;
+# this removes the old arbitrary roll/yaw discontinuity in world-frame MLP
+# observations without changing the gravity-in-palm direction or offset.
 targets:
   - {id: p000_t030, phi_deg: 0,   theta_deg: 30,  base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.0, -0.01], offset_source: Shadowhand18Tilted_28-21-45-23_30}
   - {id: p000_t060, phi_deg: 0,   theta_deg: 60,  base_tilt_axis: [0.0, 1.0, 0.0],                    object_palm_offset: [0.08, 0.06, 0.0],  offset_source: Shadowhand18Tilted_29-21-15-32_60}

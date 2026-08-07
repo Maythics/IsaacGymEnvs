@@ -20,10 +20,19 @@ env:
   # rule and remain constant throughout an episode.
   baseTiltAngleDeg: 0.0
   baseTiltAxis: [0.0, 1.0, 0.0]
+  # A world-Z yaw preserves gravity in the palm and is used by the curriculum
+  # to avoid abrupt world-frame observation changes between checkpoints.
+  baseYawDeg: 0.0
 
   # Palm-local object translation copied by the curriculum manifest and
   # manually tuned per gravity-in-palm direction.
   objectPalmOffset: [0.0, 0.0, 0.0]
+
+  # Per-reset gravity grace period for the physical object. Set the hold time
+  # to 0 for exact legacy behavior. Standalone non-headless/test runs and the
+  # curriculum use this same task implementation.
+  objectGravityCompensationSeconds: 0.2
+  objectGravityRampSeconds: 0.1
 
   # Local to WujiHandFixedTilt: distance=1 with +Z normal places the plane at
   # world z=-1, so a dropped object crosses fallDistance before ground contact.

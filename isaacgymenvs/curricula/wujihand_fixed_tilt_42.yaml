@@ -4,10 +4,21 @@
 version: 1
 name: wujihand_fixed_tilt_42
 
+checkpoint_search_roots:
+  - /home/srtp/research_manip/IsaacGymEnvs/isaacgymenvs/runs
+
+density:
+  coverage_radius_deg: 15.0
+
+
+multi_object_stage:
+  enabled: true
+  object_types: [block, egg, pen]
+
 seed:
   # Best discovered zero-degree WujiHand checkpoint (recorded reward 4455.50).
   # This is editable if a different 0-degree policy should be the resume point.
-  start_checkpoint: /home/hengxu/hyzhang/IsaacGymEnvs/isaacgymenvs/runs/WujiHand_28-18-31-14/nn/WujiHand.pth
+  start_checkpoint: /home/srtp/research_manip/IsaacGymEnvs/isaacgymenvs/runs/WujiHand_29-10-01-07/nn/WujiHand.pth
   theta_deg: 0
   phi_deg: 0
   base_tilt_axis: [0.0, 1.0, 0.0]
@@ -20,11 +31,32 @@ training:
   max_iterations: 200000
   episode_length: 300
   score_to_win: 2500
+  # Soft continuity target; nearest-parent fallback keeps all GPUs scheduled
+  # even when a nearby curriculum case times out.
+  max_parent_transition_deg: 30.0
+  discovered_parent_min_reward: 2500
+  allow_unscored_discovered_parents: false
+  # Advance as soon as the saved checkpoint is strictly above score_to_win.
+  # Physical certification is optional diagnostics, never a queue blocker.
+  promotion_mode: reward_only
   save_best_after: 1
   object_type: block
   gpu: "0"
-  workers: 2
+  gpu_ids: [0, 1, 2, 3]
+  min_free_memory_mb: 4096
+  horizon_length: 8
+  resource_profiles:
+    - {min_free_memory_mb: 40000, num_envs: 20480, minibatch_size: 20480}
+    - {min_free_memory_mb: 20000, num_envs: 10240, minibatch_size: 10240}
+    - {min_free_memory_mb: 10000, num_envs: 5120,  minibatch_size: 5120}
+    - {min_free_memory_mb: 4096,  num_envs: 2048,  minibatch_size: 2048}
   timeout_seconds: 18000
+  object_gravity_compensation_seconds: 0.2
+  object_gravity_ramp_seconds: 0.1
+  certification_success_rate: 0.60
+  certification_episodes: 128
+  certification_num_envs: 128
+  certification_timeout_seconds: 1800
 
 # Direction convention:
 #   base_tilt_axis = [-sin(phi), cos(phi), 0]
