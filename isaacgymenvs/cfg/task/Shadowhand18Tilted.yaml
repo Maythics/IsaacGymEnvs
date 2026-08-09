@@ -20,6 +20,9 @@ env:
   # legacy ShadowHand spawn offset. Adjust this to lower/shift the object after
   # inspecting a tilted reset, without changing source code.
   objectPalmOffset: [0.0, 0.0, 0.0]
+  # Empty preserves objectPalmOffset.  The curriculum's parent-policy probe
+  # fills this with a short candidate stencil for vectorized evaluation only.
+  objectPalmOffsetCandidates: []
 
   # Cancel gravity on the physical object for this many seconds after every
   # reset while contacts and policy actions remain active. This is implemented

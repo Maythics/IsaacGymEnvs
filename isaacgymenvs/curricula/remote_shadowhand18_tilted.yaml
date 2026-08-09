@@ -129,6 +129,16 @@ training:
   timeout_seconds: 10800
   object_gravity_compensation_seconds: 0.2
   object_gravity_ramp_seconds: 0.1
+  # Before each new/retried target, evaluate its selected parent at the
+  # hard-coded offset and every +/-3 cm XYZ neighbor.  The winner replaces
+  # only that training attempt's scalar objectPalmOffset.
+  offset_probe:
+    enabled: true
+    num_envs: 65536
+    episodes: 65536
+    step_m: 0.03
+    timeout_seconds: 1800
+    seed: 314159
   certification_success_rate: 0.60
   certification_episodes: 128
   certification_num_envs: 128

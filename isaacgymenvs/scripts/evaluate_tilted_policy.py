@@ -26,6 +26,17 @@ def _vector(value):
     return values
 
 
+def _vector_list(value):
+    if not value:
+        return []
+    try:
+        return [_vector(item) for item in value.split(";")]
+    except argparse.ArgumentTypeError as exc:
+        raise argparse.ArgumentTypeError(
+            "expected semicolon-separated three-number offsets"
+        ) from exc
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", choices=("Shadowhand18Tilted", "WujiHandFixedTilt"), required=True)
@@ -38,6 +49,12 @@ def parse_args(argv=None):
     parser.add_argument("--axis", type=_vector, required=True)
     parser.add_argument("--base-yaw-deg", type=float, default=0.0)
     parser.add_argument("--offset", type=_vector, required=True)
+    parser.add_argument(
+        "--offset-candidates",
+        type=_vector_list,
+        default=[],
+        help="Semicolon-separated palm-local offset triples, assigned round-robin per env",
+    )
     parser.add_argument("--gravity-hold-seconds", type=float, default=0.2)
     parser.add_argument("--gravity-ramp-seconds", type=float, default=0.1)
     parser.add_argument("--object-type", default="block")
@@ -168,6 +185,18 @@ def main(argv=None):
                 name: {"episodes": 0, "retained_successes": 0}
                 for name in object_names
             }
+            offset_candidates = args.offset_candidates or [args.offset]
+            per_offset = [
+                {
+                    "candidate_index": index,
+                    "offset": list(offset),
+                    "episodes": 0,
+                    "retained_successes": 0,
+                    "reward_sum": 0.0,
+                    "step_sum": 0,
+                }
+                for index, offset in enumerate(offset_candidates)
+            ]
             episode_rewards = torch.zeros(task.num_envs, device=task.device)
             episode_steps = torch.zeros(task.num_envs, device=task.device, dtype=torch.long)
 
@@ -191,6 +220,15 @@ def main(argv=None):
                 no_success_mask = info["tilt_timeout_without_success"][done_ids].bool()
                 goal_mask = info["tilt_goal_hit"][done_ids].bool()
                 type_indices = info["tilt_object_type_index"][done_ids].long()
+                candidate_index_metric = info.get(
+                    "tilt_object_palm_offset_candidate_index"
+                )
+                if candidate_index_metric is None:
+                    # WujiHandFixedTilt and unmodified third-party tasks keep
+                    # scalar-offset evaluation behavior.
+                    offset_indices = torch.zeros(n, device=task.device, dtype=torch.long)
+                else:
+                    offset_indices = candidate_index_metric[done_ids].long()
                 retained += int(retained_mask.sum().item())
                 dropped += int(dropped_mask.sum().item())
                 timed_out += int(timeout_mask.sum().item())
@@ -201,6 +239,17 @@ def main(argv=None):
                     per_object[name]["episodes"] += 1
                     per_object[name]["retained_successes"] += int(
                         retained_mask[local_index].item()
+                    )
+                    offset_summary = per_offset[int(offset_indices[local_index].item())]
+                    offset_summary["episodes"] += 1
+                    offset_summary["retained_successes"] += int(
+                        retained_mask[local_index].item()
+                    )
+                    offset_summary["reward_sum"] += float(
+                        episode_rewards[done_ids[local_index]].item()
+                    )
+                    offset_summary["step_sum"] += int(
+                        episode_steps[done_ids[local_index]].item()
                     )
                 reward_sum += float(episode_rewards[done_ids].sum().item())
                 step_sum += int(episode_steps[done_ids].sum().item())
@@ -216,6 +265,17 @@ def main(argv=None):
             minimum_object_success_rate = min(
                 values["retained_success_rate"] for values in per_object.values()
             )
+            for summary in per_offset:
+                episodes = summary["episodes"]
+                summary["retained_success_rate"] = (
+                    summary["retained_successes"] / float(episodes) if episodes else 0.0
+                )
+                summary["mean_episode_reward"] = (
+                    summary.pop("reward_sum") / float(episodes) if episodes else 0.0
+                )
+                summary["mean_episode_steps"] = (
+                    summary.pop("step_sum") / float(episodes) if episodes else 0.0
+                )
             result = {
                 "version": 1,
                 "task": args.task,
@@ -238,6 +298,8 @@ def main(argv=None):
                 "axis": args.axis,
                 "base_yaw_deg": args.base_yaw_deg,
                 "offset": args.offset,
+                "offset_candidates": offset_candidates,
+                "per_offset": per_offset,
                 "object_type": args.object_type,
                 "object_type_pool": object_names,
                 "per_object": per_object,
@@ -277,6 +339,12 @@ def main(argv=None):
         "force_render=False",
         "seed={}".format(args.seed),
     ]
+    if args.offset_candidates:
+        overrides.append(
+            "task.env.objectPalmOffsetCandidates=[{}]".format(
+                ",".join(_format_vector(offset) for offset in args.offset_candidates)
+            )
+        )
     with initialize_config_dir(config_dir=str(package_dir / "cfg"), version_base="1.1"):
         cfg = compose(config_name="config", overrides=overrides)
     cfg.seed = set_seed(cfg.seed, torch_deterministic=True)

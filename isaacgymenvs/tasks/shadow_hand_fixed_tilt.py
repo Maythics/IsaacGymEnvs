@@ -51,11 +51,36 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
             float(cfg["env"].get("baseYawDeg", 0.0))
         )
         self._object_palm_offset_cfg = cfg["env"].get("objectPalmOffset", [0.0, 0.0, 0.0])
+        raw_object_palm_offset_candidates = cfg["env"].get(
+            "objectPalmOffsetCandidates", []
+        )
 
         if len(self._base_tilt_axis_cfg) != 3:
             raise ValueError("baseTiltAxis must contain exactly three values.")
         if len(self._object_palm_offset_cfg) != 3:
             raise ValueError("objectPalmOffset must contain exactly three values.")
+        # Hydra keeps nested overrides as OmegaConf ListConfig instances.
+        # Convert any iterable here so both ordinary YAML lists and the probe's
+        # command-line candidate stencil follow the same task path.
+        try:
+            raw_candidates = list(raw_object_palm_offset_candidates)
+        except TypeError as exc:
+            raise ValueError(
+                "objectPalmOffsetCandidates must be an iterable of three-number offsets."
+            ) from exc
+        self._object_palm_offset_candidates_cfg = []
+        for offset in raw_candidates:
+            try:
+                values = [float(value) for value in offset]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "objectPalmOffsetCandidates entries must contain three numbers."
+                ) from exc
+            if len(values) != 3 or not all(math.isfinite(value) for value in values):
+                raise ValueError(
+                    "objectPalmOffsetCandidates entries must contain three finite numbers."
+                )
+            self._object_palm_offset_candidates_cfg.append(values)
 
         super().__init__(cfg, rl_device, sim_device, graphics_device_id, headless,
                          virtual_screen_capture, force_render)
@@ -69,6 +94,16 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
         self.base_tilt_axis = axis / axis_norm
         self.object_palm_offset = torch.tensor(
             self._object_palm_offset_cfg, dtype=torch.float, device=self.device
+        )
+        configured_candidates = self._object_palm_offset_candidates_cfg or [
+            self._object_palm_offset_cfg
+        ]
+        self.object_palm_offset_candidates = torch.tensor(
+            configured_candidates, dtype=torch.float, device=self.device
+        )
+        self.object_palm_offset_candidate_index = (
+            torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+            % self.object_palm_offset_candidates.shape[0]
         )
 
         # Snapshot actual physics transforms rather than actor creation poses:
@@ -128,7 +163,7 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
         _, _, initial_palm_pos, initial_palm_quat = self._tilted_palm_pose(all_env_ids)
         initial_object_pos = initial_palm_pos + quat_rotate(
             initial_palm_quat,
-            self.default_object_in_palm + self.object_palm_offset.unsqueeze(0),
+            self.default_object_in_palm + self._object_palm_offsets(all_env_ids),
         )
         self.goal_center = initial_object_pos + quat_rotate(
             initial_palm_quat, self.initial_goal_offset_in_palm,
@@ -147,6 +182,9 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
     def post_physics_step(self):
         super().post_physics_step()
         self._publish_gravity_compensation_metrics()
+        self.extras["tilt_object_palm_offset_candidate_index"] = (
+            self.object_palm_offset_candidate_index
+        )
 
     def _fall_ref_pos(self):
         """Measure falling relative to the actual palm rather than the goal."""
@@ -163,6 +201,17 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
         return quat_rotate(
             palm_quat, self.goal_visual_displacement_in_palm[env_ids]
         )
+
+    def _object_palm_offsets(self, env_ids):
+        """Return the fixed probe offset assigned to each environment.
+
+        With the default singleton candidate this is exactly the historical
+        ``objectPalmOffset`` behavior.  The evaluator can supply a small
+        candidate list to benchmark all offsets in one vectorized rollout.
+        """
+        return self.object_palm_offset_candidates[
+            self.object_palm_offset_candidate_index[env_ids]
+        ]
 
     def reset_target_pose(self, env_ids, apply_reset=False, from_goal_reach=False,
                           base_pos=None):
@@ -279,7 +328,7 @@ class ShadowHandFixedTilt(ObjectGravityCompensationMixin, ShadowHand):
 
         object_local_pos = (
             self.default_object_in_palm[env_ids]
-            + self.object_palm_offset.unsqueeze(0)
+            + self._object_palm_offsets(env_ids)
             + noise_in_palm
         )
         object_pos = palm_pos + quat_rotate(palm_quat, object_local_pos)

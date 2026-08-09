@@ -2,6 +2,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
 import yaml
@@ -43,6 +44,17 @@ class ManifestTests(unittest.TestCase):
                 launcher.training_profile_for_gpu(manifest["training"], 24135)[key]
                 for key in ("num_envs", "minibatch_size")
             ),
+        )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "num_envs": 65536,
+                "episodes": 65536,
+                "step_m": 0.03,
+                "timeout_seconds": 1800,
+                "seed": 314159,
+            },
+            manifest["training"]["offset_probe"],
         )
         displayed = launcher.continuous_viewer_targets(manifest, block_targets[:7])
         self.assertAlmostEqual(-90.0, displayed[6].base_yaw_deg, places=6)
@@ -145,6 +157,125 @@ class ResourceProfileTests(unittest.TestCase):
                 resolved["num_envs"] * training["horizon_length"]
                 % resolved["minibatch_size"],
             )
+
+
+class OffsetProbeTests(unittest.TestCase):
+    def test_three_centimeter_stencil_keeps_manifest_offset_as_center(self):
+        center = (0.08, 0.06, 0.0)
+        candidates = launcher.offset_probe_candidates(center, 0.03)
+
+        self.assertEqual(27, len(candidates))
+        self.assertIn(center, candidates)
+        self.assertIn((0.05, 0.03, -0.03), candidates)
+        self.assertIn((0.11, 0.09, 0.03), candidates)
+
+    def test_probe_winner_prefers_retention_then_lingering_then_reward(self):
+        result = {
+            "per_offset": [
+                {
+                    "candidate_index": 0,
+                    "offset": [0.08, 0.06, 0.0],
+                    "retained_success_rate": 0.10,
+                    "mean_episode_steps": 300.0,
+                    "mean_episode_reward": 100.0,
+                },
+                {
+                    "candidate_index": 1,
+                    "offset": [0.11, 0.06, 0.0],
+                    "retained_success_rate": 0.10,
+                    "mean_episode_steps": 300.0,
+                    "mean_episode_reward": 200.0,
+                },
+                {
+                    "candidate_index": 2,
+                    "offset": [0.05, 0.06, 0.0],
+                    "retained_success_rate": 0.11,
+                    "mean_episode_steps": 1.0,
+                    "mean_episode_reward": -1000.0,
+                },
+            ]
+        }
+
+        selected, winner = launcher.select_offset_probe_winner(result)
+
+        self.assertEqual((0.05, 0.06, 0.0), selected)
+        self.assertEqual(2, winner["candidate_index"])
+
+    def test_same_parent_and_settings_reuses_saved_probe(self):
+        candidates = launcher.offset_probe_candidates((0.08, 0.06, 0.0), 0.03)
+        checkpoint = Path("/tmp/parent.pth")
+        config = {
+            "num_envs": 65536,
+            "episodes": 65536,
+            "step_m": 0.03,
+            "seed": 314159,
+        }
+        record = {
+            "offset_probe": {
+                "status": "succeeded",
+                "parent_checkpoint": str(checkpoint.resolve()),
+                "candidates": [list(candidate) for candidate in candidates],
+                "settings": config,
+                "selected_offset": [0.11, 0.06, 0.0],
+            }
+        }
+
+        self.assertEqual(
+            (0.11, 0.06, 0.0),
+            launcher.reusable_offset_probe(record, checkpoint, candidates, config),
+        )
+        self.assertIsNone(
+            launcher.reusable_offset_probe(record, Path("/tmp/other.pth"), candidates, config)
+        )
+
+    def test_vectorized_probe_passes_all_candidates_to_evaluator(self):
+        target = launcher.Target(
+            "target", 45.0, 30.0, (-0.70710678, 0.70710678, 0.0),
+            (0.08, 0.06, 0.0), 0,
+        )
+        training = {
+            "certification_episodes": 128,
+            "certification_num_envs": 128,
+            "episode_length": 300,
+            "object_gravity_compensation_seconds": 0.2,
+            "object_gravity_ramp_seconds": 0.1,
+            "object_type": "block",
+        }
+        candidates = launcher.offset_probe_candidates(target.object_offset, 0.03)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            checkpoint = root / "parent.pth"
+            checkpoint.touch()
+            result_path = root / "probe.json"
+            result_path.write_text("{}")
+            with mock.patch.object(
+                launcher.subprocess, "run",
+                return_value=launcher.subprocess.CompletedProcess([], 0, ""),
+            ) as run:
+                launcher.evaluate_checkpoint(
+                    "python",
+                    target,
+                    checkpoint,
+                    result_path,
+                    training,
+                    "0",
+                    "Shadowhand18Tilted",
+                    episodes=65536,
+                    num_envs=65536,
+                    offset_candidates=candidates,
+                    seed=123,
+                    timeout_seconds=1800,
+                )
+
+        command = run.call_args.args[0]
+        self.assertTrue(any(token.startswith("--offset-candidates=") for token in command))
+        self.assertIn("--axis=-0.70710678,0.70710678,0", command)
+        self.assertIn("--episodes", command)
+        self.assertIn("65536", command)
+        candidate_argument = next(
+            token for token in command if token.startswith("--offset-candidates=")
+        )
+        self.assertIn("0.05,0.03,-0.03", candidate_argument)
 
 
 class ParentSelectionTests(unittest.TestCase):

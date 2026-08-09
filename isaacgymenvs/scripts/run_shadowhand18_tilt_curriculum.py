@@ -14,6 +14,7 @@ import copy
 import concurrent.futures
 import datetime
 import fcntl
+import itertools
 import json
 import math
 import os
@@ -38,6 +39,14 @@ DEFAULT_MANIFEST = PACKAGE_DIR / "curricula" / "shadowhand18_tilt_42.yaml"
 NEGATIVE_REWARD_SENTINEL = -1000000000.0
 STATE_VERSION = 5
 PROMOTION_MODES = ("reward_only", "reward_and_physical", "physical_only")
+OFFSET_PROBE_DEFAULTS = {
+    "enabled": False,
+    "num_envs": 65536,
+    "episodes": 65536,
+    "step_m": 0.03,
+    "timeout_seconds": 1800,
+    "seed": 314159,
+}
 
 
 class ManifestValidationError(ValueError):
@@ -357,6 +366,30 @@ def load_manifest(path, require_offsets=True, require_seed=True):
         errors.append("training.object_gravity_compensation_seconds must be non-negative")
     if float(training["object_gravity_ramp_seconds"]) < 0:
         errors.append("training.object_gravity_ramp_seconds must be non-negative")
+    offset_probe = training.get("offset_probe", {})
+    if offset_probe is None:
+        offset_probe = {}
+    if not isinstance(offset_probe, dict):
+        errors.append("training.offset_probe must be a mapping")
+        offset_probe = {}
+    offset_probe = dict(offset_probe)
+    for key, default in OFFSET_PROBE_DEFAULTS.items():
+        offset_probe.setdefault(key, default)
+    if not isinstance(offset_probe["enabled"], bool):
+        errors.append("training.offset_probe.enabled must be true or false")
+    for key in ("num_envs", "episodes", "timeout_seconds", "seed"):
+        value = offset_probe[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            errors.append("training.offset_probe.{} must be a positive integer".format(key))
+    step_m = offset_probe["step_m"]
+    if (
+        isinstance(step_m, bool)
+        or not isinstance(step_m, (int, float))
+        or not math.isfinite(float(step_m))
+        or float(step_m) <= 0.0
+    ):
+        errors.append("training.offset_probe.step_m must be a positive finite number")
+    training["offset_probe"] = offset_probe
     success_rate = training.setdefault("certification_success_rate", 0.60)
     if not isinstance(success_rate, (int, float)) or not 0.0 <= float(success_rate) <= 1.0:
         errors.append("training.certification_success_rate must be between 0 and 1")
@@ -1057,6 +1090,78 @@ def _format_vector(vector):
     return "[{}]".format(",".join(_format_number(value) for value in vector))
 
 
+def offset_probe_candidates(center, step_m):
+    """Return the centered 3 x 3 x 3 palm-local offset stencil.
+
+    The manifest value remains the center/initial guess.  Keeping all three
+    coordinates in the stencil lets a probe recover diagonal corrections
+    without inventing an angle-dependent offset rule.
+    """
+    center = tuple(float(value) for value in center)
+    if len(center) != 3:
+        raise ValueError("offset probe center must contain three values")
+    step_m = float(step_m)
+    return tuple(
+        tuple(center[axis] + delta[axis] * step_m for axis in range(3))
+        for delta in itertools.product((-1.0, 0.0, 1.0), repeat=3)
+    )
+
+
+def offset_probe_seed(target_id, attempt, base_seed):
+    """Stable per-target probe seed; unlike hash(), this survives restarts."""
+    value = int(base_seed) + 1009 * int(attempt)
+    for character in str(target_id).encode("utf-8"):
+        value = (value * 33 + character) % 2147483647
+    return value
+
+
+def offset_probe_rank(summary):
+    """Prefer successful, long-lived, then high-reward parent rollouts."""
+    return (
+        float(summary.get("retained_success_rate", 0.0)),
+        float(summary.get("mean_episode_steps", 0.0)),
+        float(summary.get("mean_episode_reward", float("-inf"))),
+    )
+
+
+def select_offset_probe_winner(result):
+    summaries = result.get("per_offset", [])
+    if not summaries:
+        raise ValueError("offset probe result contains no per_offset summaries")
+    winner = max(
+        summaries,
+        key=lambda summary: (
+            offset_probe_rank(summary),
+            -int(summary.get("candidate_index", 0)),
+        ),
+    )
+    offset = winner.get("offset")
+    if not isinstance(offset, list) or len(offset) != 3:
+        raise ValueError("offset probe winner has no three-number offset")
+    return tuple(float(value) for value in offset), winner
+
+
+def reusable_offset_probe(record, parent_checkpoint, candidates, probe_config):
+    """A probe is valid only for the exact warm start and stencil settings."""
+    probe = record.get("offset_probe")
+    if not isinstance(probe, dict) or probe.get("status") != "succeeded":
+        return None
+    if probe.get("parent_checkpoint") != str(Path(parent_checkpoint).resolve()):
+        return None
+    if probe.get("candidates") != [list(candidate) for candidate in candidates]:
+        return None
+    expected = {
+        key: probe_config[key]
+        for key in ("num_envs", "episodes", "step_m", "seed")
+    }
+    if probe.get("settings") != expected:
+        return None
+    selected = probe.get("selected_offset")
+    if not isinstance(selected, list) or len(selected) != 3:
+        return None
+    return tuple(float(value) for value in selected)
+
+
 def build_command(python_executable, target, staged_checkpoint, run_name, training):
     command = [
         str(python_executable),
@@ -1485,20 +1590,34 @@ def training_profile_for_gpu(training, free_memory_mb):
 
 
 def evaluate_checkpoint(python_executable, target, checkpoint, result_path,
-                        training, gpu_id, task_name):
+                        training, gpu_id, task_name, episodes=None, num_envs=None,
+                        offset_candidates=None, seed=None, timeout_seconds=None):
+    """Run the regular evaluator, optionally assigning one offset per env.
+
+    Normal certification continues to pass a scalar target offset.  Offset
+    probing supplies the full stencil in one large vectorized evaluator run.
+    """
     command = [
         str(python_executable),
         str(PACKAGE_DIR / "scripts" / "evaluate_tilted_policy.py"),
         "--task", task_name,
         "--checkpoint", str(Path(checkpoint).resolve()),
         "--result", str(Path(result_path).resolve()),
-        "--episodes", str(training["certification_episodes"]),
-        "--num-envs", str(training["certification_num_envs"]),
+        "--episodes", str(
+            training["certification_episodes"] if episodes is None else episodes
+        ),
+        "--num-envs", str(
+            training["certification_num_envs"] if num_envs is None else num_envs
+        ),
         "--episode-length", str(training["episode_length"]),
         "--angle-deg", _format_number(target.theta_deg),
-        "--axis", ",".join(_format_number(value) for value in target.axis),
+        # CSV vectors may begin with a minus sign.  Use --name=value so
+        # argparse cannot mistake them for a following option.
+        "--axis={}".format(",".join(_format_number(value) for value in target.axis)),
         "--base-yaw-deg", _format_number(target.base_yaw_deg),
-        "--offset", ",".join(_format_number(value) for value in target.object_offset),
+        "--offset={}".format(
+            ",".join(_format_number(value) for value in target.object_offset)
+        ),
         "--gravity-hold-seconds", _format_number(
             training["object_gravity_compensation_seconds"]
         ),
@@ -1508,6 +1627,17 @@ def evaluate_checkpoint(python_executable, target, checkpoint, result_path,
         "--object-type", str(training["object_type"]),
         "--headless",
     ]
+    if offset_candidates:
+        command.append(
+            "--offset-candidates={}".format(
+                ";".join(
+                ",".join(_format_number(value) for value in candidate)
+                for candidate in offset_candidates
+                )
+            )
+        )
+    if seed is not None:
+        command.extend(("--seed", str(int(seed))))
     if target.object_type_pool:
         command.extend(("--object-type-pool", ",".join(target.object_type_pool)))
     environment = os.environ.copy()
@@ -1519,7 +1649,10 @@ def evaluate_checkpoint(python_executable, target, checkpoint, result_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
-        timeout=float(training.get("certification_timeout_seconds", 1800)),
+        timeout=float(
+            training.get("certification_timeout_seconds", 1800)
+            if timeout_seconds is None else timeout_seconds
+        ),
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -1529,6 +1662,53 @@ def evaluate_checkpoint(python_executable, target, checkpoint, result_path,
         )
     with Path(result_path).open("r") as stream:
         return json.load(stream)
+
+
+def run_offset_probe(python_executable, target, parent_checkpoint, record,
+                     state_dir, training, gpu_id, task_name, attempt):
+    """Probe the parent on a local 3 cm offset stencil before fine-tuning."""
+    config = training["offset_probe"]
+    candidates = offset_probe_candidates(target.object_offset, config["step_m"])
+    parent_checkpoint = Path(parent_checkpoint).resolve()
+    reused = reusable_offset_probe(record, parent_checkpoint, candidates, config)
+    if reused is not None:
+        return reused, True
+
+    seed = offset_probe_seed(target.target_id, attempt, config["seed"])
+    result_path = (
+        Path(state_dir) / "offset_probes"
+        / "{}_{:02d}.json".format(target.target_id, int(attempt))
+    )
+    result = evaluate_checkpoint(
+        python_executable,
+        target,
+        parent_checkpoint,
+        result_path,
+        training,
+        gpu_id,
+        task_name,
+        episodes=config["episodes"],
+        num_envs=config["num_envs"],
+        offset_candidates=candidates,
+        seed=seed,
+        timeout_seconds=config["timeout_seconds"],
+    )
+    selected_offset, winner = select_offset_probe_winner(result)
+    record["offset_probe"] = {
+        "status": "succeeded",
+        "parent_checkpoint": str(parent_checkpoint),
+        "candidates": [list(candidate) for candidate in candidates],
+        "settings": {
+            key: config[key]
+            for key in ("num_envs", "episodes", "step_m", "seed")
+        },
+        "seed": seed,
+        "result_path": str(result_path),
+        "selected_offset": list(selected_offset),
+        "winner": winner,
+        "completed_at": utc_now(),
+    }
+    return selected_offset, False
 
 
 def _is_recertifiable_failure(record):
@@ -1760,6 +1940,33 @@ def run_curriculum(manifest, state_dir, python_executable, timeout_seconds=None,
             run_target = replace(target, base_yaw_deg=transition.child_base_yaw_deg)
             attempt = int(record["attempts"]) + 1
             run_name = make_run_name(target, attempt)
+            probe_reused = False
+            probe_error = None
+            if training["offset_probe"]["enabled"]:
+                try:
+                    selected_offset, probe_reused = run_offset_probe(
+                        python_executable,
+                        run_target,
+                        parent.checkpoint,
+                        record,
+                        state_dir,
+                        training,
+                        str(gpu_id),
+                        task_name,
+                        attempt,
+                    )
+                    run_target = replace(run_target, object_offset=selected_offset)
+                except Exception as exc:
+                    # A probe is a training aid, not a new way to strand the
+                    # queue.  Preserve the manifest guess and save enough
+                    # context to diagnose the evaluator failure later.
+                    probe_error = str(exc)
+                    record["offset_probe"] = {
+                        "status": "failed",
+                        "parent_checkpoint": str(Path(parent.checkpoint).resolve()),
+                        "error": probe_error,
+                        "completed_at": utc_now(),
+                    }
             staged_checkpoint = checkpoints_dir / (run_name + "_parent.pth")
             output_checkpoint = PACKAGE_DIR / "runs" / run_name / "nn" / (run_name + ".pth")
             log_path = logs_dir / (run_name + ".log")
@@ -1797,6 +2004,7 @@ def run_curriculum(manifest, state_dir, python_executable, timeout_seconds=None,
                     ),
                     "transition_within_limit": selection.within_transition_limit,
                     "transition_limit_deg": training["max_parent_transition_deg"],
+                    "selected_object_palm_offset": list(run_target.object_offset),
                 }
             )
             atomic_write_json(state_path, state)
@@ -1854,6 +2062,24 @@ def run_curriculum(manifest, state_dir, python_executable, timeout_seconds=None,
                 ),
                 flush=True,
             )
+            if training["offset_probe"]["enabled"]:
+                if probe_error is not None:
+                    print(
+                        "  Offset probe failed; training {} from manifest offset {}: {}".format(
+                            target.target_id,
+                            _format_vector(run_target.object_offset),
+                            probe_error,
+                        ),
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "  Offset probe {} selected {}".format(
+                            "reused" if probe_reused else "selected",
+                            _format_vector(run_target.object_offset),
+                        ),
+                        flush=True,
+                    )
             return True
         except Exception as exc:
             if record is None:
