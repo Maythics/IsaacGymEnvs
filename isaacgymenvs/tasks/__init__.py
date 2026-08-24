@@ -47,6 +47,7 @@ from .shadow_hand_track import ShadowHandTrack
 from .shadow_hand_clip_track import ShadowHandClipTrack
 from .shadow_hand_tilted import ShadowHandTilted
 from .shadow_hand_fixed_tilt import ShadowHandFixedTilt
+from .shadow_hand_gravity import ShadowHandGravity
 from .shadow_stable_grasp import ShadowStableGrasp
 from .shadow_push import ShadowPush
 from .shadow_flip import ShadowFlip
@@ -57,6 +58,7 @@ from .xhand_flip import XHandFlip
 from .xhand_pour import XHandPour
 from .wuji_hand import WujiHand
 from .wuji_hand_fixed_tilt import WujiHandFixedTilt
+from .wuji_hand_gravity import WujiHandGravity
 from .wuji_hand_tilted import WujiHandTilted
 from .wuji_flip import WujiFlip
 from .wuji_push import WujiPush
@@ -132,6 +134,7 @@ isaacgym_task_map = {
     "ShadowHand": ShadowHand,
     "Shadowhand18": ShadowHand,
     "Shadowhand18Tilted": ShadowHandFixedTilt,
+    "Shadowhand18Gravity": ShadowHandGravity,
     "ShadowHandTrack": ShadowHandTrack,
     "ShadowHandClipTrack": ShadowHandClipTrack,
     "ShadowHandTilted": ShadowHandTilted,
@@ -146,6 +149,7 @@ isaacgym_task_map = {
     "XHandPour": XHandPour,
     "WujiHand": WujiHand,
     "WujiHandFixedTilt": WujiHandFixedTilt,
+    "WujiHandGravity": WujiHandGravity,
     "WujiHandTiltedSE3": WujiHandTilted,
     "WujiFlip": WujiFlip,
     "WujiPush": WujiPush,

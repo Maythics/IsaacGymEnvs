@@ -1,0 +1,22 @@
+# WujiHand with a fixed root and object-only effective gravity.
+defaults:
+  - WujiHand
+  - _self_
+
+name: WujiHandGravity
+
+env:
+  # Keep the physical palm fixed to the root.  The two compatibility DOFs
+  # preserve the legacy 22-action checkpoint interface but are not connected
+  # to the wrist/palm chain, matching WujiHandFixedTilt's fixed-base contract.
+  assetFileNameWuji: wuji_right_fixed_wrist_compat.urdf
+  compatibilityDummyWristDofs: true
+  palmBodyName: right_hand_forearm
+
+  # Unit physical acceleration in the resolved initial palm rigid-body frame.
+  # null means the native world sim.gravity expressed in that frame.
+  gravityInPalm: null
+  # This preserves world sim.gravity during initial grasp acquisition, then
+  # linearly ramps to gravityInPalm.  It is not a palm-Z assumption.
+  objectGravityHoldSeconds: 0.2
+  objectGravityRampSeconds: 0.2

@@ -1,0 +1,8 @@
+# Gravity changes physics only; retain the frozen-wrist 18-action PPO contract.
+defaults:
+  - Shadowhand18PPO
+  - _self_
+
+params:
+  config:
+    name: ${resolve_default:Shadowhand18Gravity,${....experiment}}

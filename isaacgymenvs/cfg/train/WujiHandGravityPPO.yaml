@@ -1,0 +1,8 @@
+# Gravity changes physics only; retain the 22-action fixed-wrist-compatible PPO contract.
+defaults:
+  - WujiHandPPO
+  - _self_
+
+params:
+  config:
+    name: ${resolve_default:WujiHandGravity,${....experiment}}

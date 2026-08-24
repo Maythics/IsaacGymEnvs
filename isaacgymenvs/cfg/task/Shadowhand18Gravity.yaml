@@ -1,0 +1,15 @@
+# Shadowhand18 with a fixed root and object-only effective gravity.
+defaults:
+  - Shadowhand18
+  - _self_
+
+name: Shadowhand18Gravity
+
+env:
+  # Unit physical acceleration in the resolved initial palm rigid-body frame.
+  # null means the native world sim.gravity expressed in that frame.
+  gravityInPalm: null
+  # The first period retains world sim.gravity (world -Z by default), not a
+  # hard-coded palm-Z direction.  It is then linearly ramped to gravityInPalm.
+  objectGravityHoldSeconds: 0.2
+  objectGravityRampSeconds: 0.2
